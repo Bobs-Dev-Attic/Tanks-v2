@@ -3,6 +3,14 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.1.3] - 2026-07-18
+
+### Fixed
+- Cache busting for the web bundle. `tanks.js` and `tanks_bg.wasm` have stable
+  filenames but were served with a one-year `immutable` cache, so returning
+  visitors could keep running an old build. The loader now appends a `?v=<version>`
+  query to both, so each release fetches fresh assets.
+
 ## [0.1.2] - 2026-07-18
 
 ### Fixed

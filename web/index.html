@@ -99,7 +99,10 @@
     </div>
 
     <script type="module">
-      import init from "./tanks.js";
+      // The ?v= query busts caches per release: the JS and wasm filenames are
+      // stable across versions, so without this a browser holding an old
+      // immutable copy would keep running the previous build.
+      import init from "./tanks.js?v=__GAME_VERSION__";
 
       const boot = document.getElementById("boot");
 
@@ -107,9 +110,9 @@
       // ui.rs). We do NOT rely on init()'s promise: on wasm, winit uses an
       // exception for control flow, so init() never resolves even though the
       // game runs fine. This safety net reveals the canvas if that ever fails.
-      const failsafe = setTimeout(() => boot && boot.classList.add("hidden"), 25000);
+      setTimeout(() => boot && boot.classList.add("hidden"), 25000);
 
-      init().catch((err) => {
+      init({ module_or_path: "./tanks_bg.wasm?v=__GAME_VERSION__" }).catch((err) => {
         // Expected on wasm (winit control-flow exception) — the game is still
         // running. Only surface a real, early failure.
         console.debug("init() threw (expected on wasm):", err);
