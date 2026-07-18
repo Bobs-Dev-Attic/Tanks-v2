@@ -1,0 +1,4 @@
+# Select the browser crypto backend for `getrandom` on the web target. Without
+# this, getrandom 0.3 refuses to compile for wasm32-unknown-unknown.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

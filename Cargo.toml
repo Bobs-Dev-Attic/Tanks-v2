@@ -1,0 +1,35 @@
+[package]
+name = "tanks-v2"
+version = "0.1.1"
+edition = "2021"
+description = "WWII low-poly isometric tank squad commander built with Bevy, deployable to the web."
+authors = ["Tanks-v2"]
+
+[dependencies]
+bevy = { version = "0.15", default-features = true, features = ["webgl2"] }
+
+# Pin wasm-bindgen so the crate matches the wasm-bindgen-cli used at build time.
+# getrandom 0.3 needs an explicit backend on wasm32-unknown-unknown; the
+# `wasm_js` feature plus the cfg in .cargo/config.toml wires it to the browser's
+# crypto API.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.100"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+# Fast iterative native builds get some optimization for dependencies so the
+# engine is not painfully slow while our own crate stays quick to recompile.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+# Release profile tuned for a small web binary while staying friendly to
+# memory-constrained CI / Vercel builders (LTO off + multiple codegen units keep
+# peak RAM and build time down; wasm-opt in the deploy pipeline recovers size).
+[profile.release]
+opt-level = "s"
+lto = false
+codegen-units = 16
+panic = "abort"
+strip = true

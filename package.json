@@ -1,0 +1,10 @@
+{
+  "name": "tanks-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WWII low-poly isometric tank squad commander (Bevy + WebAssembly).",
+  "scripts": {
+    "build": "bash build-web.sh",
+    "vercel-build": "bash build-web.sh"
+  }
+}
