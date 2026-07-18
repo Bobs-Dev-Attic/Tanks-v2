@@ -3,13 +3,16 @@ name: Build & Deploy to Vercel
 # Builds the Bevy wasm bundle in CI and deploys the prebuilt static output to
 # Vercel. This keeps the (heavy) Rust build off the Vercel builder.
 #
+# This is an OPTIONAL alternative to the default deploy path (Vercel's Git
+# integration serving the committed dist/). It's manual-only so it doesn't fire
+# on every push to main. To use it, add the repo secrets below and run it from
+# the Actions tab.
+#
 # Required repository secrets:
 #   VERCEL_TOKEN    - a Vercel access token
 #   VERCEL_ORG_ID   - from `vercel link` / project settings
 #   VERCEL_PROJECT_ID
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
