@@ -32,6 +32,7 @@ fn drive_with_keyboard(
 
     for mut vehicle in &mut tanks {
         vehicle.throttle = forward as f32;
-        vehicle.steer = turn as f32;
+        // Negated so D / Right steers to the player's right (was reversed).
+        vehicle.steer = -(turn as f32);
     }
 }

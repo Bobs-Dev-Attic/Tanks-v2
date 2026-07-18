@@ -8,6 +8,7 @@
 use crate::control::PlayerControlled;
 use crate::physics::Vehicle;
 use crate::terrain::Terrain;
+use crate::weapons::{Muzzle, Turret, Weapons};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssetUsages;
@@ -178,28 +179,35 @@ fn spawn_tank(
                 Transform::from_xyz(side * 1.45, 0.4, 0.0),
             ));
         }
-        // Turret + mantlet + barrel + cupola.
-        p.spawn((
-            Mesh3d(assets.turret_mesh.clone()),
-            MeshMaterial3d(hull_mat.clone()),
-            Transform::from_xyz(0.0, 1.55, 0.2),
-        ));
-        p.spawn((
-            Mesh3d(assets.mantlet_mesh.clone()),
-            MeshMaterial3d(hull_mat.clone()),
-            Transform::from_xyz(0.0, 1.5, -0.9),
-        ));
-        p.spawn((
-            Mesh3d(assets.barrel_mesh.clone()),
-            MeshMaterial3d(assets.detail_mat.clone()),
-            Transform::from_xyz(0.0, 1.5, -2.4)
-                .with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
-        ));
-        p.spawn((
-            Mesh3d(assets.cupola_mesh.clone()),
-            MeshMaterial3d(hull_mat.clone()),
-            Transform::from_xyz(0.45, 2.05, 0.7),
-        ));
+        // Rotating turret assembly — yaws to aim at the cursor. The pivot sits
+        // at the hull centre; turret box, gun, cupola, and muzzle are its
+        // children so they swing together.
+        p.spawn((Transform::default(), Visibility::default(), Turret))
+            .with_children(|t| {
+                t.spawn((
+                    Mesh3d(assets.turret_mesh.clone()),
+                    MeshMaterial3d(hull_mat.clone()),
+                    Transform::from_xyz(0.0, 1.55, 0.2),
+                ));
+                t.spawn((
+                    Mesh3d(assets.mantlet_mesh.clone()),
+                    MeshMaterial3d(hull_mat.clone()),
+                    Transform::from_xyz(0.0, 1.5, -0.9),
+                ));
+                t.spawn((
+                    Mesh3d(assets.barrel_mesh.clone()),
+                    MeshMaterial3d(assets.detail_mat.clone()),
+                    Transform::from_xyz(0.0, 1.5, -2.4)
+                        .with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+                ));
+                t.spawn((
+                    Mesh3d(assets.cupola_mesh.clone()),
+                    MeshMaterial3d(hull_mat.clone()),
+                    Transform::from_xyz(0.45, 2.05, 0.7),
+                ));
+                // Muzzle: invisible marker at the gun tip, read by the weapons.
+                t.spawn((Transform::from_xyz(0.0, 1.5, -3.9), Muzzle));
+            });
         // Road wheels along each track.
         for side in [-1.0f32, 1.0] {
             for k in 0..5 {
@@ -225,7 +233,9 @@ fn spawn_tank(
     });
 
     if team == Team::Player {
-        commands.entity(root).insert(PlayerControlled);
+        commands
+            .entity(root)
+            .insert((PlayerControlled, Weapons::default()));
     }
 }
 

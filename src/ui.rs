@@ -107,11 +107,11 @@ fn spawn_hud(mut commands: Commands) {
         ))
         .with_children(|p| {
             for line in [
-                "TRAINING — DRIVE THE TANK",
-                "Accelerate / reverse: W S  or  Up / Down",
-                "Steer: A D  or  Left / Right",
-                "Orbit camera: middle-drag / Q E / one-finger",
-                "Pitch: R F   Zoom: wheel / Z X / pinch",
+                "TRAINING — DRIVE & FIGHT",
+                "Drive: W S / ↑ ↓    Steer: A D / ← →",
+                "Turret aims at the mouse cursor",
+                "Main gun: E / left-click    MG: Q / right-click",
+                "Camera: middle-drag orbit • R F pitch • wheel zoom",
                 "Camera follows your tank.",
             ] {
                 p.spawn((
