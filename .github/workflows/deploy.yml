@@ -1,0 +1,64 @@
+name: Build & Deploy to Vercel
+
+# Builds the Bevy wasm bundle in CI and deploys the prebuilt static output to
+# Vercel. This keeps the (heavy) Rust build off the Vercel builder.
+#
+# Required repository secrets:
+#   VERCEL_TOKEN    - a Vercel access token
+#   VERCEL_ORG_ID   - from `vercel link` / project settings
+#   VERCEL_PROJECT_ID
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.toml') }}
+
+      - name: Install tooling
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.100 || true
+          sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build web bundle
+        run: bash build-web.sh
+
+      - name: Assemble Vercel prebuilt output
+        run: |
+          mkdir -p .vercel/output/static
+          cp -r dist/* .vercel/output/static/
+          cat > .vercel/output/config.json <<'JSON'
+          {
+            "version": 3,
+            "routes": [
+              { "src": "/tanks_bg.wasm", "headers": { "cache-control": "public, max-age=31536000, immutable" }, "continue": true },
+              { "src": "/tanks.js", "headers": { "cache-control": "public, max-age=31536000, immutable" }, "continue": true },
+              { "handle": "filesystem" }
+            ]
+          }
+          JSON
+
+      - name: Deploy to Vercel
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npx --yes vercel@latest deploy --prebuilt --prod \
+            --token "${{ secrets.VERCEL_TOKEN }}" --yes
