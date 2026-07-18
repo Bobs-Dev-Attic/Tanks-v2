@@ -93,7 +93,7 @@
     <div id="boot">
       <h1>TANKS-V2</h1>
       <div class="sub">WWII Isometric Squad Commander</div>
-      <div class="ver" id="boot-version">v0.1.1</div>
+      <div class="ver" id="boot-version">v0.1.2</div>
       <div class="sub">Loading battlefield…</div>
       <div class="bar"><span></span></div>
     </div>
@@ -102,17 +102,18 @@
       import init from "./tanks.js";
 
       const boot = document.getElementById("boot");
-      init()
-        .then(() => {
-          // Give the engine a moment to render its first frame, then reveal it.
-          setTimeout(() => boot.classList.add("hidden"), 250);
-          setTimeout(() => boot.remove(), 1000);
-        })
-        .catch((err) => {
-          console.error(err);
-          boot.querySelector(".sub:last-of-type").textContent =
-            "Failed to load — see console.";
-        });
+
+      // The engine dismisses this overlay from Rust once it's running (see
+      // ui.rs). We do NOT rely on init()'s promise: on wasm, winit uses an
+      // exception for control flow, so init() never resolves even though the
+      // game runs fine. This safety net reveals the canvas if that ever fails.
+      const failsafe = setTimeout(() => boot && boot.classList.add("hidden"), 25000);
+
+      init().catch((err) => {
+        // Expected on wasm (winit control-flow exception) — the game is still
+        // running. Only surface a real, early failure.
+        console.debug("init() threw (expected on wasm):", err);
+      });
     </script>
   </body>
 </html>

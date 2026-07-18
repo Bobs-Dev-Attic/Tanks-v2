@@ -1,6 +1,6 @@
 [package]
 name = "tanks-v2"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "WWII low-poly isometric tank squad commander built with Bevy, deployable to the web."
 authors = ["Tanks-v2"]
@@ -15,6 +15,10 @@ bevy = { version = "0.15", default-features = true, features = ["webgl2"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.100"
 getrandom = { version = "0.3", features = ["wasm_js"] }
+# Used to dismiss the HTML loading overlay from the engine once the game is
+# actually running (winit's control-flow exception means the JS init() promise
+# never resolves, so JS can't reliably do this).
+web-sys = { version = "0.3", features = ["Window", "Document", "Element"] }
 
 # Fast iterative native builds get some optimization for dependencies so the
 # engine is not painfully slow while our own crate stays quick to recompile.

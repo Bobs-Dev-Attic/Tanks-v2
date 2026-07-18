@@ -3,6 +3,14 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.1.2] - 2026-07-18
+
+### Fixed
+- Loading screen no longer hangs on the web. Bevy's winit backend uses an
+  exception for control flow on wasm, so the JS `init()` promise never resolves
+  and the HTML overlay was never dismissed. The engine now hides the overlay
+  itself once it reaches the Playing state, with a JS failsafe as backup.
+
 ## [0.1.1] - 2026-07-18
 
 ### Changed

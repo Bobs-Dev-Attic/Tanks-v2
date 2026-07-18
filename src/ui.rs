@@ -11,7 +11,7 @@ impl Plugin for UiPlugin {
         app.insert_resource(LoadingTimer(Timer::from_seconds(1.4, TimerMode::Once)))
             .add_systems(OnEnter(GameState::Loading), spawn_loading)
             .add_systems(OnExit(GameState::Loading), despawn::<LoadingRoot>)
-            .add_systems(OnEnter(GameState::Playing), spawn_hud)
+            .add_systems(OnEnter(GameState::Playing), (spawn_hud, dismiss_html_overlay))
             .add_systems(
                 Update,
                 tick_loading.run_if(in_state(GameState::Loading)),
@@ -141,6 +141,22 @@ fn spawn_hud(mut commands: Commands) {
         },
         HudRoot,
     ));
+}
+
+/// Hide the HTML loading overlay in `index.html` now that the engine is running.
+/// On the web, winit uses an exception for control flow, so the JS `init()`
+/// promise never resolves — the engine has to dismiss the overlay itself.
+fn dismiss_html_overlay() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(element) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("boot"))
+        {
+            // The `.hidden` class fades it out and disables pointer events.
+            element.set_class_name("hidden");
+        }
+    }
 }
 
 fn despawn<C: Component>(mut commands: Commands, query: Query<Entity, With<C>>) {
