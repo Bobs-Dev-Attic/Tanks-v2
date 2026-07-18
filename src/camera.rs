@@ -5,6 +5,7 @@
 //! the battlefield. All input arrives pre-digested in [`crate::input::GameInput`],
 //! so this module only turns those requests into camera motion.
 
+use crate::control::PlayerControlled;
 use crate::input::GameInput;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
@@ -71,6 +72,7 @@ fn drive_camera(
     input: Res<GameInput>,
     terrain: Option<Res<Terrain>>,
     mut cameras: Query<(&mut IsoCamera, &mut Transform, &mut Projection)>,
+    players: Query<&Transform, (With<PlayerControlled>, Without<IsoCamera>)>,
 ) {
     let Ok((mut iso, mut transform, mut projection)) = cameras.get_single_mut() else {
         return;
@@ -83,18 +85,24 @@ fn drive_camera(
     // Zoom (scale shrinks as we zoom in).
     iso.scale = (iso.scale - input.zoom).clamp(MIN_SCALE, MAX_SCALE);
 
-    // Pan across the ground plane, relative to current facing. Speed scales with
-    // zoom so panning feels consistent at any zoom level.
-    if input.pan != Vec2::ZERO {
-        let forward = Vec3::new(-iso.yaw.sin(), 0.0, -iso.yaw.cos());
-        let right = Vec3::new(iso.yaw.cos(), 0.0, -iso.yaw.sin());
-        let world_per_px = iso.scale * 0.0016;
-        let mut focus = iso.focus + (right * input.pan.x + forward * -input.pan.y) * world_per_px;
-        let limit = MAP_SIZE * 0.5 - 8.0;
-        focus.x = focus.x.clamp(-limit, limit);
-        focus.z = focus.z.clamp(-limit, limit);
-        iso.focus = focus;
+    // Follow the player tank: ease the focus toward it, plus any manual pan
+    // (e.g. two-finger drag on mobile) as an offset.
+    let mut target = iso.focus;
+    if let Ok(player) = players.get_single() {
+        target.x = player.translation.x;
+        target.z = player.translation.z;
     }
+    if input.pan != Vec2::ZERO {
+        let right = Vec3::new(iso.yaw.cos(), 0.0, -iso.yaw.sin());
+        let forward = Vec3::new(-iso.yaw.sin(), 0.0, -iso.yaw.cos());
+        let world_per_px = iso.scale * 0.0016;
+        target += (right * input.pan.x + forward * -input.pan.y) * world_per_px;
+    }
+    let limit = MAP_SIZE * 0.5 - 8.0;
+    iso.focus.x += (target.x - iso.focus.x) * 0.12;
+    iso.focus.z += (target.z - iso.focus.z) * 0.12;
+    iso.focus.x = iso.focus.x.clamp(-limit, limit);
+    iso.focus.z = iso.focus.z.clamp(-limit, limit);
 
     // Keep the focus point resting on the terrain for nice framing.
     if let Some(terrain) = terrain.as_ref() {

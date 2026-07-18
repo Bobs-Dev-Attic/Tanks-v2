@@ -95,12 +95,7 @@ fn gather_input(
     game.orbit.x += key_axis(KeyCode::KeyE, KeyCode::KeyQ) * 90.0 * dt;
     game.orbit.y += key_axis(KeyCode::KeyF, KeyCode::KeyR) * 60.0 * dt;
     game.zoom += key_axis(KeyCode::KeyX, KeyCode::KeyZ) * 30.0 * dt;
-
-    let pan_x = key_axis(KeyCode::KeyD, KeyCode::KeyA)
-        + key_axis(KeyCode::ArrowRight, KeyCode::ArrowLeft);
-    let pan_y = key_axis(KeyCode::KeyS, KeyCode::KeyW)
-        + key_axis(KeyCode::ArrowDown, KeyCode::ArrowUp);
-    game.pan += Vec2::new(-pan_x, -pan_y) * 260.0 * dt;
+    // Note: WASD / arrow keys drive the tank (see `control`), not the camera.
 
     // --- Mouse wheel zoom ---
     for ev in wheel.read() {

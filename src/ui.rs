@@ -107,12 +107,12 @@ fn spawn_hud(mut commands: Commands) {
         ))
         .with_children(|p| {
             for line in [
-                "COMMAND",
-                "Select: click / tap  •  Box-select: drag",
-                "Move order: right-click / tap ground",
-                "Orbit: middle-drag / Q E / one-finger",
+                "TRAINING — DRIVE THE TANK",
+                "Accelerate / reverse: W S  or  Up / Down",
+                "Steer: A D  or  Left / Right",
+                "Orbit camera: middle-drag / Q E / one-finger",
                 "Pitch: R F   Zoom: wheel / Z X / pinch",
-                "Pan: WASD / arrows / two-finger",
+                "Camera follows your tank.",
             ] {
                 p.spawn((
                     Text::new(line),
