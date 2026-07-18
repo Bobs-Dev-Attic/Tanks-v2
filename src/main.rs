@@ -11,6 +11,7 @@
 
 mod camera;
 mod control;
+mod effects;
 mod input;
 mod physics;
 // Retained for the full squad mode; the current training mission uses direct
@@ -21,6 +22,7 @@ mod tank;
 mod terrain;
 mod ui;
 mod version;
+mod weapons;
 
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
@@ -67,6 +69,8 @@ fn main() {
             tank::TankPlugin,
             physics::PhysicsPlugin,
             control::ControlPlugin,
+            weapons::WeaponsPlugin,
+            effects::EffectsPlugin,
             ui::UiPlugin,
         ))
         .add_systems(Startup, setup_lighting)

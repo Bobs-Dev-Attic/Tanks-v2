@@ -3,6 +3,24 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.2.0] - 2026-07-18
+
+### Added
+- **Mouse-aimed turret**: the turret yaws to follow the cursor's point on the ground.
+- **Two weapons**: main gun (E / left-click) fires a shell; machine gun
+  (Q / right-click) sprays tracers.
+- **Main-gun impact effects**: a flash, flying debris that falls and settles,
+  dust and rising smoke, and a glowing ember that smolders and dims out over a
+  few seconds. MG rounds kick up small dust puffs.
+- Larger battlefield (map roughly doubled).
+
+### Changed
+- `Q`/`E` now fire weapons (were camera orbit); orbit is middle-drag / touch,
+  pitch is `R`/`F`, zoom is the wheel / `Z`/`X`.
+
+### Fixed
+- Steering was reversed: `A`/`D` (and ←/→) now turn the expected direction.
+
 ## [0.1.4] - 2026-07-18
 
 ### Changed

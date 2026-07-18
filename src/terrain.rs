@@ -9,12 +9,12 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 
-/// Half the map is this far from the origin on X and Z.
-pub const MAP_SIZE: f32 = 260.0;
+/// The map spans this many world units on X and Z (centered on the origin).
+pub const MAP_SIZE: f32 = 560.0;
 /// Number of grid cells per side (vertices per side is `GRID + 1`).
-const GRID: usize = 100;
+const GRID: usize = 150;
 /// Peak terrain elevation in world units.
-const MAX_HEIGHT: f32 = 26.0;
+const MAX_HEIGHT: f32 = 32.0;
 
 pub struct TerrainPlugin;
 

@@ -92,10 +92,10 @@ fn gather_input(
     let key_axis = |neg: KeyCode, pos: KeyCode| -> f32 {
         (keys.pressed(pos) as i32 - keys.pressed(neg) as i32) as f32
     };
-    game.orbit.x += key_axis(KeyCode::KeyE, KeyCode::KeyQ) * 90.0 * dt;
     game.orbit.y += key_axis(KeyCode::KeyF, KeyCode::KeyR) * 60.0 * dt;
     game.zoom += key_axis(KeyCode::KeyX, KeyCode::KeyZ) * 30.0 * dt;
-    // Note: WASD / arrow keys drive the tank (see `control`), not the camera.
+    // Note: WASD / arrows drive the tank; Q / E fire weapons (see `control` and
+    // `weapons`). Camera orbit is middle-drag or one-finger touch.
 
     // --- Mouse wheel zoom ---
     for ev in wheel.read() {
