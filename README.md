@@ -56,17 +56,26 @@ libraries installed): `cargo run`.
 
 ## Deploying to Vercel
 
-Two supported paths:
+This repo deploys via Vercel's **Git integration serving a prebuilt bundle** —
+the compiled `dist/` is committed, and [`vercel.json`](vercel.json) sets an empty
+build command so Vercel just serves the static files. This keeps the heavy Rust
+build off Vercel's builder entirely, so deploys are fast and reliable.
 
-1. **GitHub Actions (recommended).** [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-   builds the wasm bundle in CI and deploys the *prebuilt* static output to
-   Vercel, keeping the heavy Rust build off Vercel's builder. Add the repo
-   secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID`.
+To update the deployed game:
 
-2. **Connect the repo to Vercel directly.** [`vercel.json`](vercel.json) declares
-   the build (`build-web.sh`) and install (`scripts/vercel-install.sh`, which
-   bootstraps Rust) steps and serves `dist/`. Simpler to set up, but the Bevy
-   build is slow on Vercel's builder.
+```bash
+./build-web.sh          # recompiles wasm into ./dist (with version injected)
+git add dist && git commit -m "Rebuild web bundle" && git push
+```
+
+Vercel redeploys automatically on push. Production comes from the default branch;
+other branches get preview deployments.
+
+> A CI-built alternative is included at
+> [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml): it builds the
+> wasm on GitHub's runners and deploys a prebuilt bundle via the Vercel CLI
+> (needs `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` secrets). Use this
+> if you'd rather not commit `dist/`.
 
 ## Project layout
 

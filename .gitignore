@@ -1,5 +1,6 @@
 /target
-/dist
+# NOTE: dist/ is committed on purpose — Vercel's git integration serves it as a
+# prebuilt static bundle (no Rust build on Vercel). Rebuild it with ./build-web.sh.
 **/*.rs.bk
 Cargo.lock.orig
 node_modules

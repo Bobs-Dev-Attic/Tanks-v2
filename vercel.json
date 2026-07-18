@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "bash build-web.sh",
+  "buildCommand": "",
+  "installCommand": "",
   "outputDirectory": "dist",
-  "installCommand": "bash scripts/vercel-install.sh",
   "headers": [
     {
       "source": "/tanks_bg.wasm",
