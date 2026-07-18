@@ -3,6 +3,14 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.1.1] - 2026-07-18
+
+### Changed
+- Deployment now serves a committed prebuilt WebAssembly bundle via Vercel's Git
+  integration (no Rust build on Vercel's side), making deploys fast and reliable.
+- Continuous delivery: pushes to `main` publish to production; version is bumped
+  on every update.
+
 ## [0.1.0] - 2026-07-18
 
 Initial playable vertical slice.

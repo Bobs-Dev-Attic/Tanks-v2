@@ -30,12 +30,22 @@ wasm-bindgen \
   --out-name tanks \
   target/wasm32-unknown-unknown/release/tanks-v2.wasm
 
-# Optional size optimisation if wasm-opt (binaryen) is available.
-if command -v wasm-opt >/dev/null 2>&1; then
+# Optional size optimisation. Off by default to keep the deploy loop fast; set
+# WASM_OPT=1 to enable. wasm-opt must be told which wasm features rustc emitted,
+# and we write to a temp file so a failure never corrupts the good bundle.
+if [ "${WASM_OPT:-0}" = "1" ] && command -v wasm-opt >/dev/null 2>&1; then
   echo "==> Optimising wasm with wasm-opt…"
-  wasm-opt -Os -o dist/tanks_bg.wasm dist/tanks_bg.wasm
+  if wasm-opt -Os \
+      --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+      --enable-mutable-globals --enable-multivalue --enable-reference-types \
+      -o dist/tanks_bg.opt.wasm dist/tanks_bg.wasm; then
+    mv dist/tanks_bg.opt.wasm dist/tanks_bg.wasm
+  else
+    echo "==> wasm-opt failed; keeping the unoptimised wasm"
+    rm -f dist/tanks_bg.opt.wasm
+  fi
 else
-  echo "==> wasm-opt not found; skipping (install binaryen for a smaller build)"
+  echo "==> Skipping wasm-opt (set WASM_OPT=1 to enable)"
 fi
 
 echo "==> Assembling static site…"
