@@ -5,8 +5,8 @@
 //! repeating stripe texture that scrolls with speed, and the road wheels spin,
 //! selling the tracked-vehicle motion.
 
+use crate::control::PlayerControlled;
 use crate::physics::Vehicle;
-use crate::squad::Commandable;
 use crate::terrain::Terrain;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -20,7 +20,7 @@ pub struct TankPlugin;
 
 impl Plugin for TankPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_squad)
+        app.add_systems(Startup, spawn_training_mission)
             .add_systems(Update, animate_treads);
     }
 }
@@ -49,7 +49,8 @@ pub struct TankVisual {
 #[derive(Component)]
 pub struct RoadWheel;
 
-fn spawn_squad(
+/// Training mission: a single tank the player drives with the keyboard.
+fn spawn_training_mission(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -76,63 +77,31 @@ fn spawn_squad(
         .as_ref()
         .map(|t| t.spawn_area_center())
         .unwrap_or(Vec2::ZERO);
+    // Start resting on the ground (or just above; physics snaps it down).
+    let ground = terrain
+        .as_ref()
+        .map(|t| t.height_at(center.x, center.y))
+        .unwrap_or(0.0);
 
-    // Player squad in a staggered wedge.
-    let player_offsets = [
-        Vec2::new(0.0, 0.0),
-        Vec2::new(-9.0, -8.0),
-        Vec2::new(9.0, -8.0),
-        Vec2::new(-18.0, -16.0),
-        Vec2::new(18.0, -16.0),
-    ];
-    for (i, off) in player_offsets.iter().enumerate() {
-        let pos = center + *off;
-        spawn_tank(
-            &mut commands,
-            SpawnAssets {
-                hull_mesh: &hull_mesh,
-                turret_mesh: &turret_mesh,
-                mantlet_mesh: &mantlet_mesh,
-                barrel_mesh: &barrel_mesh,
-                tread_mesh: &tread_mesh,
-                wheel_mesh: &wheel_mesh,
-                cupola_mesh: &cupola_mesh,
-                tread_tex: &tread_tex,
-                detail_mat: &detail_mat,
-            },
-            &mut materials,
-            pos,
-            (i as f32) * 0.05 - 0.1,
-            Team::Player,
-        );
-    }
-
-    // A few enemy tanks across the field for a sense of a battlefield.
-    let enemy_spots = [
-        Vec2::new(-40.0, 70.0),
-        Vec2::new(0.0, 82.0),
-        Vec2::new(46.0, 68.0),
-    ];
-    for spot in enemy_spots {
-        spawn_tank(
-            &mut commands,
-            SpawnAssets {
-                hull_mesh: &hull_mesh,
-                turret_mesh: &turret_mesh,
-                mantlet_mesh: &mantlet_mesh,
-                barrel_mesh: &barrel_mesh,
-                tread_mesh: &tread_mesh,
-                wheel_mesh: &wheel_mesh,
-                cupola_mesh: &cupola_mesh,
-                tread_tex: &tread_tex,
-                detail_mat: &detail_mat,
-            },
-            &mut materials,
-            spot,
-            std::f32::consts::PI,
-            Team::Enemy,
-        );
-    }
+    spawn_tank(
+        &mut commands,
+        SpawnAssets {
+            hull_mesh: &hull_mesh,
+            turret_mesh: &turret_mesh,
+            mantlet_mesh: &mantlet_mesh,
+            barrel_mesh: &barrel_mesh,
+            tread_mesh: &tread_mesh,
+            wheel_mesh: &wheel_mesh,
+            cupola_mesh: &cupola_mesh,
+            tread_tex: &tread_tex,
+            detail_mat: &detail_mat,
+        },
+        &mut materials,
+        center,
+        ground + 0.6,
+        0.0,
+        Team::Player,
+    );
 }
 
 /// Bundle of shared asset handles passed to [`spawn_tank`].
@@ -153,6 +122,7 @@ fn spawn_tank(
     assets: SpawnAssets,
     materials: &mut Assets<StandardMaterial>,
     ground_xz: Vec2,
+    start_y: f32,
     yaw: f32,
     team: Team,
 ) {
@@ -174,8 +144,7 @@ fn spawn_tank(
         ..default()
     });
 
-    // Spawn well above the terrain and let suspension physics drop it into place.
-    let start = Vec3::new(ground_xz.x, 42.0, ground_xz.y);
+    let start = Vec3::new(ground_xz.x, start_y, ground_xz.y);
 
     let mut vehicle = Vehicle::default();
     vehicle.yaw = yaw;
@@ -256,7 +225,7 @@ fn spawn_tank(
     });
 
     if team == Team::Player {
-        commands.entity(root).insert(Commandable::default());
+        commands.entity(root).insert(PlayerControlled);
     }
 }
 
@@ -273,7 +242,9 @@ fn animate_treads(
         if let Some(mat) = materials.get_mut(&visual.tread_material) {
             mat.uv_transform.translation.y -= vehicle.forward_speed * dt * 0.18;
         }
-        let rot = Quat::from_rotation_z(FRAC_PI_2) * Quat::from_rotation_x(visual.spin);
+        // Roll about the wheel's own axle (the cylinder's central axis, local
+        // Y) — then lay it on its side so the axle points across the hull.
+        let rot = Quat::from_rotation_z(FRAC_PI_2) * Quat::from_rotation_y(visual.spin);
         for &wheel in &visual.wheels {
             if let Ok(mut transform) = wheels.get_mut(wheel) {
                 transform.rotation = rot;

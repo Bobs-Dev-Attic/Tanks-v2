@@ -10,8 +10,12 @@
 //! - [`ui`]       loading screen (with version) and in-game HUD
 
 mod camera;
+mod control;
 mod input;
 mod physics;
+// Retained for the full squad mode; the current training mission uses direct
+// keyboard control instead (see `control`).
+#[allow(dead_code)]
 mod squad;
 mod tank;
 mod terrain;
@@ -62,7 +66,7 @@ fn main() {
             terrain::TerrainPlugin,
             tank::TankPlugin,
             physics::PhysicsPlugin,
-            squad::SquadPlugin,
+            control::ControlPlugin,
             ui::UiPlugin,
         ))
         .add_systems(Startup, setup_lighting)

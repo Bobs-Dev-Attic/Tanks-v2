@@ -3,6 +3,18 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.1.4] - 2026-07-18
+
+### Changed
+- The first mission is now a **training mission**: a single tank the player
+  drives directly with the keyboard (W/S or ↑/↓ to accelerate/reverse, A/D or
+  ←/→ to steer). The camera follows the tank; orbit/pitch/zoom still work.
+- The tank spawns resting on the ground instead of dropping in from above.
+
+### Fixed
+- Road wheels now roll about their axle (the cylinder's central axis) instead
+  of tumbling about a radial axis.
+
 ## [0.1.3] - 2026-07-18
 
 ### Fixed
