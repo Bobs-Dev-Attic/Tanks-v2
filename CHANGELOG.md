@@ -3,6 +3,16 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.5.1] - 2026-07-19
+
+### Changed
+- The **machine gun is now hull-mounted at the front** of the tank (co-driver's
+  MG) instead of firing from the turret gun. It fires forward within an arc and
+  has **limited range** (tracers fade out after ~55 units).
+- Fixed the hull's front/back: the glacis and headlights now sit at the front
+  (the way the tank drives and the gun points at rest), with the engine deck and
+  exhausts at the rear.
+
 ## [0.5.0] - 2026-07-19
 
 ### Added

@@ -21,6 +21,11 @@ use std::time::Duration;
 const SHELL_SPEED: f32 = 90.0;
 /// Gravity applied to shells (must match the ballistic solver).
 const SHELL_GRAVITY: f32 = 30.0;
+/// Machine-gun tracer speed and its limited effective range (world units).
+const MG_SPEED: f32 = 130.0;
+const MG_RANGE: f32 = 55.0;
+/// The hull MG only engages targets within this half-arc of straight ahead.
+const MG_ARC_COS: f32 = 0.5; // 60°
 /// Turret is "on target" within this yaw error (radians).
 const YAW_TOL: f32 = 0.03;
 /// Gun is "laid" within this elevation error (radians).
@@ -118,9 +123,14 @@ impl GunMount {
     }
 }
 
-/// Empty marker at the gun muzzle; its `GlobalTransform` is the shot origin.
+/// Empty marker at the main-gun muzzle; its `GlobalTransform` is the shot origin.
 #[derive(Component)]
 pub struct Muzzle;
+
+/// Hull-mounted machine gun at the front of the tank; fixed to the hull, so it
+/// only fires forward. Its `GlobalTransform` is the MG shot origin.
+#[derive(Component)]
+pub struct HullMg;
 
 /// Per-tank weapon state.
 #[derive(Component)]
@@ -344,7 +354,8 @@ fn operate_main_gun(
     gun_tf.translation = GUN_PIVOT + Vec3::Z * gun.recoil;
 }
 
-/// The machine gun sprays tracers toward the aim point; direct fire, no waiting.
+/// The hull machine gun fires short-range tracers forward from the front of the
+/// tank; it only engages targets within a forward arc.
 #[allow(clippy::too_many_arguments)]
 fn fire_machine_gun(
     mut commands: Commands,
@@ -355,10 +366,10 @@ fn fire_machine_gun(
     assets: Res<WeaponAssets>,
     effects: Option<Res<EffectAssets>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    muzzles: Query<&GlobalTransform, With<Muzzle>>,
+    hull_mgs: Query<&GlobalTransform, With<HullMg>>,
     mut weapons: Query<&mut Weapons, With<PlayerControlled>>,
 ) {
-    let (Ok(mut weapon), Ok(muzzle)) = (weapons.get_single_mut(), muzzles.get_single()) else {
+    let (Ok(mut weapon), Ok(mg)) = (weapons.get_single_mut(), hull_mgs.get_single()) else {
         return;
     };
     weapon.mg.tick(time.delta());
@@ -367,23 +378,28 @@ fn fire_machine_gun(
     }
     weapon.mg.reset();
 
-    let (_, muzzle_rot, muzzle_pos) = muzzle.to_scale_rotation_translation();
+    let (_, mg_rot, mg_pos) = mg.to_scale_rotation_translation();
+    // The hull MG is fixed forward (hull local -Z).
+    let forward = mg_rot * Vec3::NEG_Z;
 
-    // Small muzzle flash for each round.
-    if let Some(fx) = effects.as_ref() {
-        let seed = (time.elapsed_secs() * 971.0) as u32 | 1;
-        spawn_muzzle_flash(&mut commands, fx, &mut materials, muzzle_pos, 0.55, seed);
-    }
-    let forward = muzzle_rot * Vec3::NEG_Z;
+    // Aim toward the cursor only if it is within the forward arc; otherwise the
+    // co-driver can't bring the gun to bear, so it fires straight ahead.
     let aim_dir = input
         .aim
         .zip(cameras.get_single().ok())
         .zip(terrain.as_ref())
         .and_then(|((screen, (camera, cam_tf)), t)| {
             let target = cursor_ground(screen, camera, cam_tf, t)?;
-            (target - muzzle_pos).try_normalize()
+            (target - mg_pos).try_normalize()
         })
+        .filter(|dir| dir.dot(forward) >= MG_ARC_COS)
         .unwrap_or(forward);
+
+    let seed = (time.elapsed_secs() * 971.0) as u32 | 1;
+    let flash_pos = mg_pos + forward * 0.4;
+    if let Some(fx) = effects.as_ref() {
+        spawn_muzzle_flash(&mut commands, fx, &mut materials, flash_pos, 0.4, seed);
+    }
 
     let jitter = Vec3::new(
         (time.elapsed_secs() * 91.0).sin() * 0.03,
@@ -393,10 +409,11 @@ fn fire_machine_gun(
     commands.spawn((
         Mesh3d(assets.tracer_mesh.clone()),
         MeshMaterial3d(assets.tracer_mat.clone()),
-        Transform::from_translation(muzzle_pos),
+        Transform::from_translation(mg_pos + forward * 0.5),
         Tracer {
-            vel: (aim_dir + jitter).normalize_or_zero() * 150.0,
-            life: 1.2,
+            vel: (aim_dir + jitter).normalize_or_zero() * MG_SPEED,
+            // Limited range: despawns after travelling MG_RANGE.
+            life: MG_RANGE / MG_SPEED,
         },
     ));
 }

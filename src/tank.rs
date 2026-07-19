@@ -6,7 +6,7 @@
 use crate::control::PlayerControlled;
 use crate::physics::Vehicle;
 use crate::terrain::Terrain;
-use crate::weapons::{GunMount, Muzzle, Shake, Turret, Weapons};
+use crate::weapons::{GunMount, HullMg, Muzzle, Shake, Turret, Weapons};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::mesh::VertexAttributeValues;
@@ -103,6 +103,7 @@ fn spawn_tank(
     let antenna_mesh = meshes.add(Cylinder::new(0.03, 2.2));
     let exhaust_mesh = meshes.add(Cylinder::new(0.11, 0.9));
     let headlight_mesh = meshes.add(Cuboid::new(0.22, 0.22, 0.12));
+    let mg_barrel_mesh = meshes.add(Cylinder::new(0.05, 0.7));
     let band_mesh = meshes.add(Cuboid::new(0.78, 0.55, 5.0));
     let sprocket_mesh = meshes.add(Cylinder::new(0.55, 0.36));
     let roadwheel_mesh = meshes.add(Cylinder::new(0.42, 0.32));
@@ -176,17 +177,18 @@ fn spawn_tank(
             MeshMaterial3d(hull_mat.clone()),
             Transform::from_xyz(0.0, 0.75, 0.0),
         ));
+        // The tank's front is -Z (the way it drives and the gun points at rest).
         // Sloped front glacis.
         p.spawn((
             Mesh3d(glacis_mesh.clone()),
             MeshMaterial3d(hull_mat.clone()),
-            Transform::from_xyz(0.0, 0.75, 2.45).with_rotation(Quat::from_rotation_x(-0.6)),
+            Transform::from_xyz(0.0, 0.75, -2.45).with_rotation(Quat::from_rotation_x(0.6)),
         ));
-        // Engine deck.
+        // Engine deck (rear, +Z).
         p.spawn((
             Mesh3d(deck_mesh.clone()),
             MeshMaterial3d(accent_mat.clone()),
-            Transform::from_xyz(0.0, 1.28, -1.3),
+            Transform::from_xyz(0.0, 1.28, 1.3),
         ));
         // Fenders over each track.
         for s in [-1.0f32, 1.0] {
@@ -196,20 +198,32 @@ fn spawn_tank(
                 Transform::from_xyz(s * TRACK_X, 1.05, 0.0),
             ));
         }
-        // Headlights and exhausts.
+        // Headlights (front) and exhausts (rear).
         for s in [-1.0f32, 1.0] {
             p.spawn((
                 Mesh3d(headlight_mesh.clone()),
                 MeshMaterial3d(light_mat.clone()),
-                Transform::from_xyz(s * 0.95, 1.02, 2.45),
+                Transform::from_xyz(s * 0.95, 1.02, -2.45),
             ));
             p.spawn((
                 Mesh3d(exhaust_mesh.clone()),
                 MeshMaterial3d(metal_mat.clone()),
-                Transform::from_xyz(s * 1.0, 1.1, -2.5)
+                Transform::from_xyz(s * 1.0, 1.1, 2.5)
                     .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
             ));
         }
+        // Hull machine gun at the front (co-driver's position). The marker is
+        // an unrotated point so its -Z is hull-forward; a short barrel is visual.
+        p.spawn((
+            Transform::from_xyz(0.55, 0.95, -2.4),
+            Visibility::default(),
+            HullMg,
+        ));
+        p.spawn((
+            Mesh3d(mg_barrel_mesh.clone()),
+            MeshMaterial3d(metal_mat.clone()),
+            Transform::from_xyz(0.55, 0.95, -2.7).with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
+        ));
 
         // --- Turret assembly (yaw) with nested gun mount (pitch) ---
         p.spawn((Transform::default(), Visibility::default(), Turret::new(0.9)))
