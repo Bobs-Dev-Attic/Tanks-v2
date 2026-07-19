@@ -3,6 +3,15 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.2] - 2026-07-19
+
+### Fixed
+- **The drive-stick area is no longer a dead zone for targeting.** The on-screen
+  move stick used to claim any touch in the entire lower-left 42%×70% of the
+  screen, so you couldn't designate a target there on mobile. Its touch zone is
+  now sized to the visible stick base in the bottom-left corner, leaving the rest
+  of the screen free to tap/​double-tap for targets.
+
 ## [0.7.1] - 2026-07-19
 
 ### Changed
