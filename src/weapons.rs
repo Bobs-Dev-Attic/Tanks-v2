@@ -243,7 +243,7 @@ fn setup_weapon_assets(
     // point on the surface. Each marker gets its own materials (see
     // operate_main_gun) so it can fade independently. A Bevy `Torus` already lies
     // flat in the XZ plane, so it reads as a ring painted on the ground.
-    let marker_ring_mesh = meshes.add(Torus::new(0.82, 1.0));
+    let marker_ring_mesh = meshes.add(Torus::new(0.74, 1.0));
     let marker_dome_mesh = meshes.add(Sphere::new(1.0));
     commands.insert_resource(WeaponAssets {
         shell_mesh,
@@ -348,8 +348,8 @@ fn operate_main_gun(
             let base_y = ground_y + 0.04;
             // Bright ring painted flat on the ground.
             let ring_mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(0.6, 0.92, 1.0, 0.85),
-                emissive: LinearRgba::rgb(0.6, 2.4, 3.6),
+                base_color: Color::srgba(0.65, 0.95, 1.0, 0.95),
+                emissive: LinearRgba::rgb(1.2, 4.0, 5.6),
                 unlit: true,
                 alpha_mode: AlphaMode::Blend,
                 cull_mode: None,
@@ -359,8 +359,8 @@ fn operate_main_gun(
             // Low translucent dome over it — the shockwave bubble, sitting on the
             // surface (its lower half is hidden by the terrain).
             let dome_mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(0.5, 0.85, 1.0, 0.4),
-                emissive: LinearRgba::rgb(0.5, 1.6, 2.6),
+                base_color: Color::srgba(0.55, 0.9, 1.0, 0.45),
+                emissive: LinearRgba::rgb(0.8, 2.4, 3.4),
                 unlit: true,
                 alpha_mode: AlphaMode::Blend,
                 cull_mode: Some(Face::Front),
@@ -726,10 +726,25 @@ fn pulse_marker(
     time: Res<Time>,
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    cameras: Query<&Projection, With<IsoCamera>>,
     mut markers: Query<(Entity, &mut Transform, &mut TargetMarker, Option<&mut MarkerFading>)>,
 ) {
     let dt = time.delta_secs();
     let period = 0.7;
+
+    // The orthographic scale is how many world units fill the view vertically, so
+    // it grows as the camera zooms out. Size the marker as a fraction of it (with
+    // a floor) so it stays big and prominent on screen at every zoom level.
+    let cam_scale = cameras
+        .get_single()
+        .ok()
+        .and_then(|p| match p {
+            Projection::Orthographic(o) => Some(o.scale),
+            _ => None,
+        })
+        .unwrap_or(30.0);
+    let span = (cam_scale * 0.13).max(3.5);
+
     for (entity, mut tf, mut marker, fading) in &mut markers {
         marker.age += dt;
         tf.translation.y = marker.base_y;
@@ -738,9 +753,9 @@ fn pulse_marker(
             // After firing: release outward and fade to nothing.
             fade.t += dt;
             let f = (fade.t / 0.5).clamp(0.0, 1.0);
-            tf.scale = Vec3::splat(0.2 + 2.4 * f);
-            ring_a = 0.85 * (1.0 - f);
-            dome_a = 0.4 * (1.0 - f);
+            tf.scale = Vec3::splat(span * (0.25 + 1.1 * f));
+            ring_a = 0.95 * (1.0 - f);
+            dome_a = 0.45 * (1.0 - f);
             if fade.t >= 0.5 {
                 commands.entity(entity).despawn_recursive();
                 continue;
@@ -749,9 +764,9 @@ fn pulse_marker(
             // A shockwave in reverse: collapse from wide down toward the center of
             // the target, over and over, brightening as it converges.
             let t = (marker.age % period) / period;
-            tf.scale = Vec3::splat(2.6 * (1.0 - t) + 0.18);
-            ring_a = 0.85 * (0.35 + 0.5 * (1.0 - t));
-            dome_a = 0.4 * (0.4 + 0.6 * (1.0 - t));
+            tf.scale = Vec3::splat(span * (0.12 + 0.88 * (1.0 - t)));
+            ring_a = 0.55 + 0.45 * (1.0 - t);
+            dome_a = 0.25 + 0.35 * (1.0 - t);
         }
         if let Some(mat) = materials.get_mut(&marker.ring_mat) {
             mat.base_color = mat.base_color.with_alpha(ring_a);
