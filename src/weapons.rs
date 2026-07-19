@@ -269,7 +269,6 @@ fn operate_main_gun(
     effects: Option<Res<EffectAssets>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     muzzles: Query<&GlobalTransform, With<Muzzle>>,
-    enemies: Query<&GlobalTransform, (With<Tank>, Without<PlayerControlled>)>,
     mut roots: Query<(&GlobalTransform, &mut Weapons, &mut Shake), With<PlayerControlled>>,
     mut turrets: Query<(&mut Transform, &mut Turret), Without<GunMount>>,
     mut guns: Query<(&mut Transform, &mut GunMount), Without<Turret>>,
@@ -291,39 +290,12 @@ fn operate_main_gun(
     // Reload progresses slower when the tank is in poor condition.
     weapon.main.tick(Duration::from_secs_f32(dt * cond));
 
-    // The ground point under the cursor/tap.
-    let ground_target = input
+    // The target is exactly the ground point under the cursor/tap.
+    let live_target = input
         .aim
         .zip(cameras.get_single().ok())
         .zip(terrain.as_ref())
         .and_then(|((screen, (camera, cam_tf)), t)| cursor_ground(screen, camera, cam_tf, t));
-
-    // If the aim point is near an enemy on screen, snap to that enemy's base so
-    // that clicking / double-tapping close to a tank reliably targets it (rather
-    // than the ground behind it that the ray happens to hit).
-    let snap_target = input
-        .aim
-        .zip(cameras.get_single().ok())
-        .and_then(|(screen, (camera, cam_tf))| {
-            let mut best = 80.0_f32;
-            let mut found = None;
-            for etf in &enemies {
-                let w = etf.translation();
-                if let Ok(sp) = camera.world_to_viewport(cam_tf, w) {
-                    let d = sp.distance(screen);
-                    if d < best {
-                        best = d;
-                        let gy = terrain
-                            .as_ref()
-                            .map(|t| t.height_at(w.x, w.z))
-                            .unwrap_or(w.y);
-                        found = Some(Vec3::new(w.x, gy, w.z));
-                    }
-                }
-            }
-            found
-        });
-    let live_target = snap_target.or(ground_target);
 
     let (_, root_rot, root_pos) = root_gt.to_scale_rotation_translation();
 
@@ -735,8 +707,9 @@ fn pulse_marker(
     let period = 0.7;
 
     // The orthographic scale is how many world units fill the view vertically, so
-    // it grows as the camera zooms out. Size the marker as a fraction of it (with
-    // a floor) so it stays big and prominent on screen at every zoom level.
+    // it grows as the camera zooms out. Size the marker's *starting* width as a
+    // fraction of it (with a floor), so it stays visible at every zoom level
+    // without being oversized.
     let cam_scale = cameras
         .get_single()
         .ok()
@@ -745,17 +718,17 @@ fn pulse_marker(
             _ => None,
         })
         .unwrap_or(30.0);
-    let span = (cam_scale * 0.13).max(3.5);
+    let span = (cam_scale * 0.06).max(2.2);
 
     for (entity, mut tf, mut marker, fading) in &mut markers {
         marker.age += dt;
         tf.translation.y = marker.base_y;
         let (ring_a, dome_a);
         if let Some(mut fade) = fading {
-            // After firing: release outward and fade to nothing.
+            // After firing: a small release outward, then fade to nothing.
             fade.t += dt;
             let f = (fade.t / 0.5).clamp(0.0, 1.0);
-            tf.scale = Vec3::splat(span * (0.25 + 1.1 * f));
+            tf.scale = Vec3::splat(span * (0.15 + 0.7 * f));
             ring_a = 0.95 * (1.0 - f);
             dome_a = 0.45 * (1.0 - f);
             if fade.t >= 0.5 {
@@ -763,10 +736,11 @@ fn pulse_marker(
                 continue;
             }
         } else {
-            // A shockwave in reverse: collapse from wide down toward the center of
-            // the target, over and over, brightening as it converges.
+            // A shockwave in reverse: a bubble that starts wide and collapses all
+            // the way down to the exact clicked point, over and over, brightening
+            // as it converges.
             let t = (marker.age % period) / period;
-            tf.scale = Vec3::splat(span * (0.12 + 0.88 * (1.0 - t)));
+            tf.scale = Vec3::splat(span * (0.02 + 0.98 * (1.0 - t)));
             ring_a = 0.55 + 0.45 * (1.0 - t);
             dome_a = 0.25 + 0.35 * (1.0 - t);
         }
