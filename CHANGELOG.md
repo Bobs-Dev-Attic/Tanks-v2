@@ -3,6 +3,15 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.8.2] - 2026-07-19
+
+### Fixed
+- **You now start facing the enemy.** Driving itself was always correct (W moves
+  the tank toward the way it's pointing), but the player used to spawn pointed
+  *away* from the panzer line — so "forward" drove you off the back of the battle,
+  which read as backwards. The player now spawns facing the enemies (and the
+  enemies face back), so pressing forward drives you into the fight.
+
 ## [0.8.1] - 2026-07-19
 
 ### Changed
