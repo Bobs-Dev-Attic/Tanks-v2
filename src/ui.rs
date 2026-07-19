@@ -118,8 +118,8 @@ fn spawn_hud(mut commands: Commands) {
             for line in [
                 "TRAINING — DRIVE & FIGHT",
                 "Drive: W A S D / arrows • Aim: mouse (turret traverses to it)",
-                "Main gun: E / left-click — requests a shot; the gun lays on",
-                "   target and fires once aligned and loaded",
+                "Main gun: click / E to designate a target — the turret then",
+                "   traverses, lays on it, and fires when ready",
                 "Machine gun (hull, forward, short range): Q / right-click",
                 "Touch: left stick drives • drag right to aim • FIRE / MG",
                 "Camera: middle-drag orbit • R F pitch • wheel zoom",

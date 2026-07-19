@@ -81,6 +81,16 @@ impl Terrain {
     pub fn spawn_area_center(&self) -> Vec2 {
         Vec2::ZERO
     }
+
+    /// Approximate surface colour (grass / dirt / rock / snow) at a world point —
+    /// used to tint track dust and marks by the ground material.
+    pub fn ground_color(&self, x: f32, z: f32) -> Vec3 {
+        let h = self.height_at(x, z);
+        let n = self.normal_at(x, z);
+        let slope = (1.0 - n.y).clamp(0.0, 1.0) * 3.0;
+        let c = terrain_color(h, slope);
+        Vec3::new(c[0], c[1], c[2])
+    }
 }
 
 fn spawn_terrain(

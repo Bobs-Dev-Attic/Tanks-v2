@@ -38,7 +38,7 @@ impl Plugin for WeaponsPlugin {
         app.add_systems(Startup, setup_weapon_assets)
             .add_systems(
                 Update,
-                (operate_main_gun, fire_machine_gun, update_projectiles),
+                (operate_main_gun, fire_machine_gun, update_projectiles, pulse_marker),
             )
             // Shake is applied after physics has placed the hull, just before
             // transforms propagate, so the jitter is purely visual.
@@ -143,6 +143,8 @@ pub struct Weapons {
     fire_requested: bool,
     /// The committed impact point for the pending shot.
     fire_target: Option<Vec3>,
+    /// The solved gun elevation for the committed shot.
+    fire_elev: f32,
     /// The on-ground marker entity shown while a shot is pending.
     marker: Option<Entity>,
     /// Crew/vehicle condition in 0..1; scales traverse, elevation, and reload.
@@ -160,10 +162,17 @@ impl Default for Weapons {
             mg,
             fire_requested: false,
             fire_target: None,
+            fire_elev: 0.0,
             marker: None,
             condition: 1.0,
         }
     }
+}
+
+/// The pulsing ring that marks the committed target.
+#[derive(Component)]
+pub struct TargetMarker {
+    age: f32,
 }
 
 #[derive(Component)]
@@ -206,12 +215,13 @@ fn setup_weapon_assets(
         unlit: true,
         ..default()
     });
-    // Target marker: a flat ring on the ground.
+    // Target marker: a flat ring that pulses toward the center of the target.
     let marker_mesh = meshes.add(Torus::new(0.72, 0.95));
     let marker_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(1.0, 0.25, 0.2),
-        emissive: LinearRgba::rgb(3.5, 0.4, 0.3),
+        base_color: Color::srgba(1.0, 0.25, 0.2, 1.0),
+        emissive: LinearRgba::rgb(2.0, 0.25, 0.2),
         unlit: true,
+        alpha_mode: AlphaMode::Blend,
         ..default()
     });
     commands.insert_resource(WeaponAssets {
@@ -263,54 +273,45 @@ fn operate_main_gun(
         .zip(terrain.as_ref())
         .and_then(|((screen, (camera, cam_tf)), t)| cursor_ground(screen, camera, cam_tf, t));
 
-    // A fresh fire request commits the current aim point and drops a marker.
+    let (_, root_rot, root_pos) = root_gt.to_scale_rotation_translation();
+
+    // Selecting a target (a fresh fire request) commits the aim point, solves a
+    // firing elevation that accounts for the terrain along the trajectory, and
+    // drops a pulsing marker. The turret does NOT follow the cursor otherwise.
     if input.fire_main && !weapon.fire_requested {
         if let Some(tp) = live_target {
+            let launch = muzzles
+                .get_single()
+                .map(|m| m.translation())
+                .unwrap_or(root_pos + Vec3::Y * 1.6);
             weapon.fire_requested = true;
             weapon.fire_target = Some(tp);
+            weapon.fire_elev = terrain
+                .as_ref()
+                .map(|t| solve_elevation(t, launch, tp, SHELL_SPEED, SHELL_GRAVITY, gun.min, gun.max))
+                .unwrap_or(0.0);
             let marker = commands
                 .spawn((
                     Mesh3d(assets.marker_mesh.clone()),
                     MeshMaterial3d(assets.marker_mat.clone()),
                     Transform::from_translation(tp + Vec3::Y * 0.1),
+                    TargetMarker { age: 0.0 },
                 ))
                 .id();
             weapon.marker = Some(marker);
         }
     }
 
-    // While a shot is pending, lay the gun on the committed point; otherwise
-    // keep following the live aim.
-    let target = if weapon.fire_requested {
-        weapon.fire_target
-    } else {
-        live_target
-    };
-
-    let (_, root_rot, root_pos) = root_gt.to_scale_rotation_translation();
-
-    if let Some(tp) = target {
-        // --- Turret traverse (yaw in the hull's local frame) ---
+    // Lay the turret and gun only while a shot is pending; otherwise hold.
+    if let (true, Some(tp)) = (weapon.fire_requested, weapon.fire_target) {
         let local = root_rot.inverse() * (tp - root_pos);
         let desired_yaw = (-local.x).atan2(-local.z);
-        let yaw_step = turret.rate * cond * dt;
-        turret.yaw = step_angle(turret.yaw, desired_yaw, yaw_step);
+        turret.yaw = step_angle(turret.yaw, desired_yaw, turret.rate * cond * dt);
         turret_tf.rotation = Quat::from_rotation_y(turret.yaw);
         turret.aligned = wrap_pi(desired_yaw - turret.yaw).abs() < YAW_TOL;
 
-        // --- Gun laying (ballistic elevation) ---
-        let muzzle_pos = muzzles
-            .get_single()
-            .map(|m| m.translation())
-            .unwrap_or(root_pos + Vec3::Y * 1.6);
-        let flat = Vec2::new(tp.x - muzzle_pos.x, tp.z - muzzle_pos.z)
-            .length()
-            .max(1.0);
-        let rise = tp.y - muzzle_pos.y;
-        let desired_elev =
-            ballistic_angle(flat, rise, SHELL_SPEED, SHELL_GRAVITY).clamp(gun.min, gun.max);
-        let elev_step = gun.rate * cond * dt;
-        gun.elev = step_toward(gun.elev, desired_elev, elev_step);
+        let desired_elev = weapon.fire_elev;
+        gun.elev = step_toward(gun.elev, desired_elev, gun.rate * cond * dt);
         gun_tf.rotation = Quat::from_rotation_x(gun.elev);
         gun.aligned = (gun.elev - desired_elev).abs() < ELEV_TOL;
     } else {
@@ -477,16 +478,84 @@ fn update_projectiles(
     }
 }
 
-/// Best-effort launch elevation to hit a target `x` ahead and `y` above the
-/// muzzle, given muzzle speed `v` and gravity `g`. Returns the low (direct-fire)
-/// solution, or 45° when the target is out of range.
-fn ballistic_angle(x: f32, y: f32, v: f32, g: f32) -> f32 {
-    let v2 = v * v;
-    let disc = v2 * v2 - g * (g * x * x + 2.0 * y * v2);
-    if disc < 0.0 {
-        return FRAC_PI_4;
+/// Find the gun elevation whose simulated shell lands closest to `target`,
+/// sampling the trajectory against the actual terrain so shots clear (or clip)
+/// hills correctly. Picks the best of a spread of candidate angles.
+fn solve_elevation(
+    terrain: &Terrain,
+    launch: Vec3,
+    target: Vec3,
+    speed: f32,
+    gravity: f32,
+    min_elev: f32,
+    max_elev: f32,
+) -> f32 {
+    let flat = Vec2::new(target.x - launch.x, target.z - launch.z);
+    let azimuth = Vec3::new(flat.x, 0.0, flat.y).normalize_or_zero();
+    if azimuth == Vec3::ZERO {
+        return 0.0;
     }
-    ((v2 - disc.sqrt()) / (g * x)).atan()
+    let steps = 30;
+    let mut best = min_elev;
+    let mut best_err = f32::MAX;
+    for i in 0..=steps {
+        let theta = min_elev + (max_elev - min_elev) * (i as f32 / steps as f32);
+        let impact = simulate_impact(terrain, launch, azimuth, speed, gravity, theta);
+        let err = impact.distance(target);
+        if err < best_err {
+            best_err = err;
+            best = theta;
+        }
+    }
+    best
+}
+
+/// Integrate a shell from `launch` at elevation `theta` (along `azimuth`) until
+/// it meets the terrain, returning the impact point.
+fn simulate_impact(
+    terrain: &Terrain,
+    launch: Vec3,
+    azimuth: Vec3,
+    speed: f32,
+    gravity: f32,
+    theta: f32,
+) -> Vec3 {
+    let horizontal = azimuth * (speed * theta.cos());
+    let mut vel = Vec3::new(horizontal.x, speed * theta.sin(), horizontal.z);
+    let mut pos = launch;
+    let dt = 0.03;
+    for _ in 0..500 {
+        vel.y -= gravity * dt;
+        pos += vel * dt;
+        let ground = terrain.height_at(pos.x, pos.z);
+        if pos.y <= ground {
+            return Vec3::new(pos.x, ground, pos.z);
+        }
+        if pos.distance(launch) > MAP_SIZE {
+            break;
+        }
+    }
+    pos
+}
+
+/// Animate the target marker: a ring that pulses inward toward the center.
+fn pulse_marker(
+    time: Res<Time>,
+    assets: Res<WeaponAssets>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut markers: Query<(&mut Transform, &mut TargetMarker)>,
+) {
+    let dt = time.delta_secs();
+    for (mut tf, mut marker) in &mut markers {
+        marker.age += dt;
+        let period = 0.7;
+        let t = (marker.age % period) / period;
+        // Contract from wide to the center, fading as it converges.
+        tf.scale = Vec3::splat(1.75 * (1.0 - t) + 0.12);
+        if let Some(mat) = materials.get_mut(&assets.marker_mat) {
+            mat.base_color = mat.base_color.with_alpha(0.85 * (1.0 - t) + 0.1);
+        }
+    }
 }
 
 /// Step `current` toward `target` (both radians) by at most `max_step`, taking

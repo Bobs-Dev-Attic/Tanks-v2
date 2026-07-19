@@ -286,6 +286,66 @@ pub fn spawn_impact_puff(
     );
 }
 
+/// A low dust puff kicked up by the tracks, tinted by the ground material.
+pub fn spawn_dust(
+    commands: &mut Commands,
+    fx: &EffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    pos: Vec3,
+    tint: Color,
+    scale: f32,
+    seed: u32,
+) {
+    let mut rng = Rng::new(seed | 1);
+    spawn_particle(
+        commands,
+        fx.puff_mesh.clone(),
+        materials,
+        pos + Vec3::Y * 0.15,
+        ParticleSpec {
+            tint,
+            emissive: LinearRgba::BLACK,
+            vel: Vec3::new(rng.range(-0.4, 0.4), rng.range(0.3, 0.9), rng.range(-0.4, 0.4)),
+            rise: 0.5,
+            ttl: rng.range(0.6, 1.1),
+            expand: 2.0,
+            start_scale: scale * rng.range(0.7, 1.1),
+            spin_rate: rng.range(-2.0, 2.0),
+            start_alpha: 0.4,
+        },
+        &mut rng,
+    );
+}
+
+/// A persistent flat track mark on the ground.
+pub fn spawn_track_mark(
+    commands: &mut Commands,
+    fx: &EffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    wreckage: &mut Wreckage,
+    pos: Vec3,
+    tint: Color,
+) {
+    let mat = materials.add(StandardMaterial {
+        base_color: tint,
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    });
+    let mark = commands
+        .spawn((
+            Mesh3d(fx.puff_mesh.clone()),
+            MeshMaterial3d(mat),
+            Transform::from_translation(pos + Vec3::Y * 0.04)
+                .with_rotation(Quat::from_rotation_x(-FRAC_PI_2))
+                .with_scale(Vec3::splat(0.5)),
+        ))
+        .id();
+    wreckage.add(commands, mark);
+}
+
 /// A muzzle flash: a big star plus (for the main gun) fire wisps.
 pub fn spawn_muzzle_flash(
     commands: &mut Commands,
