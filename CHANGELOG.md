@@ -3,6 +3,17 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.6] - 2026-07-19
+
+### Changed
+- **Target indicator reworked to a tighter reverse-shockwave bubble.** It's
+  smaller now, and collapses from a wide ring all the way down to the exact
+  clicked point (instead of stopping at a fixed inner size).
+
+### Removed
+- **Snap-to-nearby-enemy targeting.** Designating now uses the exact ground point
+  under the cursor/tap — no more snapping the aim to a nearby tank.
+
 ## [0.7.5] - 2026-07-19
 
 ### Changed
