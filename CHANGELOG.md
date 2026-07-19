@@ -3,6 +3,13 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.6.1] - 2026-07-19
+
+### Added
+- **Mobile pinch-to-zoom**: a two-finger pinch now steps the zoom levels.
+- **Mobile double-tap to designate**: double-tapping the battlefield selects the
+  main-gun target (equivalent to a click on desktop).
+
 ## [0.6.0] - 2026-07-19
 
 ### Changed
