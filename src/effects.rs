@@ -1,36 +1,64 @@
 //! Polygon-based effects: muzzle flashes, explosions, flying debris shards,
-//! fire, and rotating smoke — all built from flat polygon meshes with vertex
-//! gradients that fade over their lifetime. No sprites, no round billboards:
-//! every puff is an n-gon or star that faces the camera, spins, and dims.
+//! fire, rotating smoke, and smoldering craters. Every puff is an n-gon or star
+//! that faces the camera, spins, and fades — no round sprites.
+//!
+//! Debris and craters persist as scenery (they are not despawned on a timer);
+//! instead a fixed-size pool recycles the oldest ones only when the budget is
+//! exceeded, so wreckage lingers until the engine needs the memory back.
 
 use crate::camera::IsoCamera;
 use crate::terrain::Terrain;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
+use std::collections::VecDeque;
+use std::f32::consts::FRAC_PI_2;
+
+/// How many pieces of persistent wreckage (debris + craters) to keep before the
+/// oldest are recycled.
+const WRECKAGE_BUDGET: usize = 600;
 
 pub struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_effect_assets).add_systems(
+        app.init_resource::<Wreckage>().add_systems(Startup, setup_effect_assets).add_systems(
             Update,
-            (update_debris, update_particles, update_smolder, update_lifetimes),
+            (
+                update_debris,
+                update_particles,
+                update_smolder,
+                update_craters,
+                update_smokers,
+                update_lifetimes,
+            ),
         );
+    }
+}
+
+/// Ring buffer of persistent wreckage entities.
+#[derive(Resource, Default)]
+pub struct Wreckage {
+    items: VecDeque<Entity>,
+}
+
+impl Wreckage {
+    fn add(&mut self, commands: &mut Commands, entity: Entity) {
+        self.items.push_back(entity);
+        while self.items.len() > WRECKAGE_BUDGET {
+            if let Some(old) = self.items.pop_front() {
+                commands.entity(old).despawn_recursive();
+            }
+        }
     }
 }
 
 /// Shared meshes/materials for effects.
 #[derive(Resource)]
 pub struct EffectAssets {
-    /// Soft-edged polygon (center opaque, rim transparent) for smoke/dust/fire.
     puff_mesh: Handle<Mesh>,
-    /// Spiky star for muzzle flashes.
     flash_mesh: Handle<Mesh>,
-    /// Angular shard for debris.
     debris_mesh: Handle<Mesh>,
-    /// Faceted ember.
-    ember_mesh: Handle<Mesh>,
     debris_mat: Handle<StandardMaterial>,
 }
 
@@ -42,7 +70,6 @@ fn setup_effect_assets(
     let puff_mesh = meshes.add(radial_ngon(7));
     let flash_mesh = meshes.add(star_mesh(7, 0.42));
     let debris_mesh = meshes.add(Tetrahedron::default());
-    let ember_mesh = meshes.add(Sphere::new(0.6));
     let debris_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.10, 0.09, 0.08),
         perceptual_roughness: 1.0,
@@ -52,7 +79,6 @@ fn setup_effect_assets(
         puff_mesh,
         flash_mesh,
         debris_mesh,
-        ember_mesh,
         debris_mat,
     });
 }
@@ -79,14 +105,32 @@ struct Particle {
     mat: Handle<StandardMaterial>,
 }
 
+/// A glowing light (flash) that dims over its lifetime.
 #[derive(Component)]
 struct Smolder {
     age: f32,
     ttl: f32,
     base_intensity: f32,
+}
+
+/// A scorched crater that smolders (glow + light dimming) then stays as a dark
+/// scar. Not despawned by the smolder — it persists as wreckage.
+#[derive(Component)]
+struct Crater {
+    age: f32,
+    ttl: f32,
     base_emissive: LinearRgba,
-    mat: Option<Handle<StandardMaterial>>,
-    flicker: bool,
+    base_intensity: f32,
+    mat: Handle<StandardMaterial>,
+}
+
+/// Emits smoke puffs periodically for a while (craters, smoking debris).
+#[derive(Component)]
+struct Smoker {
+    timer: Timer,
+    remaining: f32,
+    scale: f32,
+    despawn_when_done: bool,
 }
 
 #[derive(Component)]
@@ -96,29 +140,30 @@ struct Lifetime {
 
 const GRAVITY: f32 = 22.0;
 
-/// A full main-gun impact explosion at `pos`.
+/// A full main-gun impact: flash, fire, smoke, dust, debris, and a crater.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_explosion(
     commands: &mut Commands,
     fx: &EffectAssets,
     materials: &mut Assets<StandardMaterial>,
+    wreckage: &mut Wreckage,
     pos: Vec3,
     seed: u32,
 ) {
     let mut rng = Rng::new(seed ^ 0x9E37_79B9);
 
-    // Flash.
     spawn_flash(commands, fx, materials, pos + Vec3::Y * 1.0, 5.0, &mut rng);
+    spawn_crater(commands, fx, materials, wreckage, pos, &mut rng);
 
     // Fireballs.
     for _ in 0..6 {
-        let tint = Color::srgba(1.0, rng.range(0.5, 0.8), 0.15, 0.9);
         spawn_particle(
             commands,
             fx.puff_mesh.clone(),
             materials,
             pos + Vec3::Y * rng.range(0.3, 1.2),
             ParticleSpec {
-                tint,
+                tint: Color::srgba(1.0, rng.range(0.5, 0.8), 0.15, 0.9),
                 emissive: LinearRgba::rgb(3.0, 1.0, 0.2),
                 vel: Vec3::new(rng.range(-3.0, 3.0), rng.range(2.0, 5.0), rng.range(-3.0, 3.0)),
                 rise: 1.0,
@@ -131,18 +176,16 @@ pub fn spawn_explosion(
             &mut rng,
         );
     }
-
-    // Smoke (dark, rising, rotating).
+    // Smoke.
     for _ in 0..9 {
         let g = rng.range(0.10, 0.18);
-        let tint = Color::srgba(g, g, g + 0.02, 0.62);
         spawn_particle(
             commands,
             fx.puff_mesh.clone(),
             materials,
             pos + Vec3::Y * rng.range(0.6, 1.6),
             ParticleSpec {
-                tint,
+                tint: Color::srgba(g, g, g + 0.02, 0.62),
                 emissive: LinearRgba::BLACK,
                 vel: Vec3::new(rng.range(-1.2, 1.2), 0.0, rng.range(-1.2, 1.2)),
                 rise: rng.range(2.5, 4.0),
@@ -155,19 +198,17 @@ pub fn spawn_explosion(
             &mut rng,
         );
     }
-
-    // Dust (tan, low, spreading).
+    // Dust.
     for _ in 0..7 {
         let dir = Vec3::new(rng.range(-1.0, 1.0), rng.range(0.1, 0.4), rng.range(-1.0, 1.0))
             .normalize_or_zero();
-        let tint = Color::srgba(0.72, 0.66, 0.5, 0.5);
         spawn_particle(
             commands,
             fx.puff_mesh.clone(),
             materials,
             pos + Vec3::Y * rng.range(0.2, 0.7),
             ParticleSpec {
-                tint,
+                tint: Color::srgba(0.72, 0.66, 0.5, 0.5),
                 emissive: LinearRgba::BLACK,
                 vel: dir * rng.range(3.0, 7.0),
                 rise: 0.3,
@@ -180,59 +221,44 @@ pub fn spawn_explosion(
             &mut rng,
         );
     }
-
-    // Debris shards.
-    for _ in 0..11 {
+    // Persistent debris shards; roughly half of them smoke for a while.
+    for i in 0..11 {
         let dir = Vec3::new(rng.range(-1.0, 1.0), rng.range(0.4, 1.5), rng.range(-1.0, 1.0))
             .normalize_or_zero();
         let speed = rng.range(7.0, 17.0);
-        commands.spawn((
-            Mesh3d(fx.debris_mesh.clone()),
-            MeshMaterial3d(fx.debris_mat.clone()),
-            Transform::from_translation(pos + Vec3::Y * 0.4)
-                .with_scale(Vec3::splat(rng.range(0.35, 0.9))),
-            Debris {
-                vel: dir * speed,
-                spin: Vec3::new(rng.range(-8.0, 8.0), rng.range(-8.0, 8.0), rng.range(-8.0, 8.0)),
-                settled: false,
-            },
-            Lifetime {
-                timer: Timer::from_seconds(4.5, TimerMode::Once),
-            },
-        ));
+        let smokes = i % 2 == 0;
+        let smoke_life = rng.range(2.5, 4.0);
+        let id = {
+            let mut e = commands.spawn((
+                Mesh3d(fx.debris_mesh.clone()),
+                MeshMaterial3d(fx.debris_mat.clone()),
+                Transform::from_translation(pos + Vec3::Y * 0.4)
+                    .with_scale(Vec3::splat(rng.range(0.35, 0.9))),
+                Debris {
+                    vel: dir * speed,
+                    spin: Vec3::new(
+                        rng.range(-8.0, 8.0),
+                        rng.range(-8.0, 8.0),
+                        rng.range(-8.0, 8.0),
+                    ),
+                    settled: false,
+                },
+            ));
+            if smokes {
+                e.insert(Smoker {
+                    timer: Timer::from_seconds(0.3, TimerMode::Repeating),
+                    remaining: smoke_life,
+                    scale: 0.5,
+                    despawn_when_done: false,
+                });
+            }
+            e.id()
+        };
+        wreckage.add(commands, id);
     }
-
-    // Smoldering ember (glow + light).
-    let ember_emissive = LinearRgba::rgb(3.2, 0.8, 0.15);
-    let ember_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.25, 0.06, 0.02),
-        emissive: ember_emissive,
-        perceptual_roughness: 1.0,
-        ..default()
-    });
-    commands.spawn((
-        Mesh3d(fx.ember_mesh.clone()),
-        MeshMaterial3d(ember_mat.clone()),
-        Transform::from_translation(pos + Vec3::Y * 0.35),
-        PointLight {
-            color: Color::srgb(1.0, 0.45, 0.15),
-            intensity: 280_000.0,
-            range: 24.0,
-            shadows_enabled: false,
-            ..default()
-        },
-        Smolder {
-            age: 0.0,
-            ttl: 5.0,
-            base_intensity: 280_000.0,
-            base_emissive: ember_emissive,
-            mat: Some(ember_mat),
-            flicker: true,
-        },
-    ));
 }
 
-/// A small dust puff where a machine-gun round hits the ground.
+/// A machine-gun ground-hit dust puff.
 pub fn spawn_impact_puff(
     commands: &mut Commands,
     fx: &EffectAssets,
@@ -260,8 +286,7 @@ pub fn spawn_impact_puff(
     );
 }
 
-/// A muzzle flash: a big star plus a couple of fire wisps. `scale` sizes it (the
-/// main gun uses a much larger value than the machine gun).
+/// A muzzle flash: a big star plus (for the main gun) fire wisps.
 pub fn spawn_muzzle_flash(
     commands: &mut Commands,
     fx: &EffectAssets,
@@ -273,7 +298,6 @@ pub fn spawn_muzzle_flash(
     let mut rng = Rng::new(seed | 1);
     spawn_flash(commands, fx, materials, pos, scale, &mut rng);
     if scale > 1.5 {
-        // Extra fire and a smoke wisp for the main gun.
         for _ in 0..3 {
             spawn_particle(
                 commands,
@@ -295,6 +319,62 @@ pub fn spawn_muzzle_flash(
             );
         }
     }
+}
+
+fn spawn_crater(
+    commands: &mut Commands,
+    fx: &EffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    wreckage: &mut Wreckage,
+    pos: Vec3,
+    rng: &mut Rng,
+) {
+    let base_emissive = LinearRgba::rgb(2.6, 0.7, 0.12);
+    let mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.06, 0.05, 0.04, 0.9),
+        emissive: base_emissive,
+        perceptual_roughness: 1.0,
+        alpha_mode: AlphaMode::Blend,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    });
+    let radius = rng.range(1.8, 2.6);
+    let crater = commands
+        .spawn((
+            Mesh3d(fx.puff_mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            Transform::from_translation(pos + Vec3::Y * 0.06)
+                .with_rotation(Quat::from_rotation_x(-FRAC_PI_2))
+                .with_scale(Vec3::splat(radius)),
+            PointLight {
+                color: Color::srgb(1.0, 0.45, 0.15),
+                intensity: 260_000.0,
+                range: 22.0,
+                shadows_enabled: false,
+                ..default()
+            },
+            Crater {
+                age: 0.0,
+                ttl: 7.0,
+                base_emissive,
+                base_intensity: 260_000.0,
+                mat,
+            },
+        ))
+        .id();
+    wreckage.add(commands, crater);
+
+    // A smoke column rising from the crater for a while.
+    commands.spawn((
+        Transform::from_translation(pos + Vec3::Y * 0.2),
+        Smoker {
+            timer: Timer::from_seconds(0.28, TimerMode::Repeating),
+            remaining: 7.0,
+            scale: 1.3,
+            despawn_when_done: true,
+        },
+    ));
 }
 
 fn spawn_flash(
@@ -333,7 +413,6 @@ fn spawn_flash(
     ));
 }
 
-/// Parameters for a fading polygon particle.
 struct ParticleSpec {
     tint: Color,
     emissive: LinearRgba,
@@ -402,15 +481,12 @@ fn update_particles(
             continue;
         }
         let t = p.age / p.ttl;
-        // Horizontal drift decays; vertical rise stays.
         tf.translation += p.vel * dt;
         tf.translation.y += p.rise * dt;
         p.vel.x *= 1.0 - (1.4 * dt).min(0.9);
         p.vel.z *= 1.0 - (1.4 * dt).min(0.9);
 
-        let scale = p.start_scale * (1.0 + p.expand * t);
-        tf.scale = Vec3::splat(scale);
-        // Face the camera and spin about the view axis.
+        tf.scale = Vec3::splat(p.start_scale * (1.0 + p.expand * t));
         tf.rotation = cam_rot * Quat::from_rotation_z(p.angle0 + p.spin_rate * p.age);
 
         if let Some(mat) = materials.get_mut(&p.mat) {
@@ -449,7 +525,6 @@ fn update_debris(
 fn update_smolder(
     time: Res<Time>,
     mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut smolders: Query<(Entity, &mut Smolder, &mut PointLight)>,
 ) {
     let dt = time.delta_secs();
@@ -459,19 +534,83 @@ fn update_smolder(
             commands.entity(entity).despawn_recursive();
             continue;
         }
-        let t = s.age / s.ttl;
-        let mut dim = 1.0 - t;
-        if s.flicker {
-            dim *= 0.72 + 0.28 * (s.age * 26.0).sin().abs();
+        light.intensity = s.base_intensity * (1.0 - s.age / s.ttl);
+    }
+}
+
+fn update_craters(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut craters: Query<(Entity, &mut Crater, &mut PointLight)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut c, mut light) in &mut craters {
+        c.age += dt;
+        let t = (c.age / c.ttl).clamp(0.0, 1.0);
+        let flicker = 0.7 + 0.3 * (c.age * 24.0).sin().abs();
+        let dim = (1.0 - t) * flicker;
+        light.intensity = c.base_intensity * dim;
+        if let Some(mat) = materials.get_mut(&c.mat) {
+            mat.emissive = LinearRgba::rgb(
+                c.base_emissive.red * dim,
+                c.base_emissive.green * dim,
+                c.base_emissive.blue * dim,
+            );
         }
-        light.intensity = s.base_intensity * dim;
-        if let Some(handle) = &s.mat {
-            if let Some(mat) = materials.get_mut(handle) {
-                mat.emissive = LinearRgba::rgb(
-                    s.base_emissive.red * dim,
-                    s.base_emissive.green * dim,
-                    s.base_emissive.blue * dim,
-                );
+        if c.age >= c.ttl {
+            // Cooled: leave a dark scar, drop the light, stop updating.
+            if let Some(mat) = materials.get_mut(&c.mat) {
+                mat.emissive = LinearRgba::BLACK;
+            }
+            light.intensity = 0.0;
+            commands.entity(entity).remove::<Crater>();
+        }
+    }
+}
+
+fn update_smokers(
+    time: Res<Time>,
+    mut commands: Commands,
+    fx: Option<Res<EffectAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut smokers: Query<(Entity, &mut Smoker, &GlobalTransform)>,
+) {
+    let Some(fx) = fx else {
+        return;
+    };
+    let dt = time.delta_secs();
+    for (entity, mut smoker, gt) in &mut smokers {
+        smoker.remaining -= dt;
+        let scale = smoker.scale;
+        if smoker.timer.tick(time.delta()).just_finished() {
+            let pos = gt.translation();
+            let mut rng = Rng::new(entity.index() ^ (time.elapsed_secs() * 120.0) as u32 | 1);
+            let g = rng.range(0.12, 0.2);
+            spawn_particle(
+                &mut commands,
+                fx.puff_mesh.clone(),
+                &mut materials,
+                pos + Vec3::Y * 0.3,
+                ParticleSpec {
+                    tint: Color::srgba(g, g, g + 0.02, 0.5),
+                    emissive: LinearRgba::BLACK,
+                    vel: Vec3::new(rng.range(-0.5, 0.5), 0.0, rng.range(-0.5, 0.5)),
+                    rise: rng.range(1.5, 2.6),
+                    ttl: rng.range(1.6, 2.6),
+                    expand: 2.4,
+                    start_scale: scale * rng.range(0.7, 1.1),
+                    spin_rate: rng.range(-1.2, 1.2),
+                    start_alpha: 0.45,
+                },
+                &mut rng,
+            );
+        }
+        if smoker.remaining <= 0.0 {
+            if smoker.despawn_when_done {
+                commands.entity(entity).despawn_recursive();
+            } else {
+                commands.entity(entity).remove::<Smoker>();
             }
         }
     }
@@ -489,8 +628,8 @@ fn update_lifetimes(
     }
 }
 
-/// A flat n-gon in the XY plane: opaque center vertex fading to a transparent
-/// rim (a radial gradient baked into vertex colors).
+/// A flat n-gon: opaque center fading to a transparent rim (radial gradient in
+/// vertex colors).
 fn radial_ngon(sides: usize) -> Mesh {
     let mut positions = vec![[0.0f32, 0.0, 0.0]];
     let mut colors = vec![[1.0f32, 1.0, 1.0, 1.0]];
@@ -522,8 +661,7 @@ fn star_mesh(points: usize, inner: f32) -> Mesh {
         let a = i as f32 / ring as f32 * std::f32::consts::TAU;
         let r = if i % 2 == 0 { 1.0 } else { inner };
         positions.push([a.cos() * r, a.sin() * r, 0.0]);
-        let alpha = if i % 2 == 0 { 0.15 } else { 0.75 };
-        colors.push([1.0, 1.0, 1.0, alpha]);
+        colors.push([1.0, 1.0, 1.0, if i % 2 == 0 { 0.15 } else { 0.75 }]);
         normals.push([0.0, 0.0, 1.0]);
         uvs.push([0.5, 0.5]);
     }

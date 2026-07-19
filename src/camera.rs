@@ -31,21 +31,36 @@ pub struct IsoCamera {
     pitch: f32,
     /// Orthographic vertical extent in world units — smaller is more zoomed in.
     scale: f32,
+    /// Discrete zoom level, 0 (closest) .. ZOOM_LEVELS-1 (farthest).
+    zoom_level: usize,
+    /// Accumulates zoom input until it crosses a whole level step.
+    zoom_accum: f32,
 }
 
 impl Default for IsoCamera {
     fn default() -> Self {
+        let zoom_level = 3;
         Self {
             focus: Vec3::ZERO,
             yaw: std::f32::consts::FRAC_PI_4, // 45°
             pitch: 35.264_f32.to_radians(),   // true isometric
-            scale: 70.0,
+            scale: scale_for_level(zoom_level),
+            zoom_level,
+            zoom_accum: 0.0,
         }
     }
 }
 
-const MIN_SCALE: f32 = 7.0;
-const MAX_SCALE: f32 = 400.0;
+const MIN_SCALE: f32 = 9.0;
+const MAX_SCALE: f32 = 360.0;
+/// Number of discrete zoom steps.
+const ZOOM_LEVELS: usize = 10;
+
+/// Orthographic scale for a discrete zoom level (geometric spacing).
+fn scale_for_level(level: usize) -> f32 {
+    let t = level as f32 / (ZOOM_LEVELS - 1) as f32;
+    MIN_SCALE * (MAX_SCALE / MIN_SCALE).powf(t)
+}
 const MIN_PITCH: f32 = 12.0_f32 * std::f32::consts::PI / 180.0;
 const MAX_PITCH: f32 = 82.0_f32 * std::f32::consts::PI / 180.0;
 
@@ -69,11 +84,13 @@ fn spawn_camera(mut commands: Commands) {
 }
 
 fn drive_camera(
+    time: Res<Time>,
     input: Res<GameInput>,
     terrain: Option<Res<Terrain>>,
     mut cameras: Query<(&mut IsoCamera, &mut Transform, &mut Projection)>,
     players: Query<&Transform, (With<PlayerControlled>, Without<IsoCamera>)>,
 ) {
+    let dt = time.delta_secs();
     let Ok((mut iso, mut transform, mut projection)) = cameras.get_single_mut() else {
         return;
     };
@@ -82,8 +99,19 @@ fn drive_camera(
     iso.yaw -= input.orbit.x.to_radians();
     iso.pitch = (iso.pitch - input.orbit.y.to_radians()).clamp(MIN_PITCH, MAX_PITCH);
 
-    // Zoom multiplicatively so it feels consistent across the wide range.
-    iso.scale = (iso.scale * (1.0 - input.zoom * 0.03)).clamp(MIN_SCALE, MAX_SCALE);
+    // Discrete zoom: each notch steps one of ZOOM_LEVELS levels; the scale then
+    // eases toward the level's target for a smooth transition.
+    iso.zoom_accum += input.zoom;
+    while iso.zoom_accum >= 1.0 {
+        iso.zoom_level = iso.zoom_level.saturating_sub(1);
+        iso.zoom_accum -= 1.0;
+    }
+    while iso.zoom_accum <= -1.0 {
+        iso.zoom_level = (iso.zoom_level + 1).min(ZOOM_LEVELS - 1);
+        iso.zoom_accum += 1.0;
+    }
+    let target_scale = scale_for_level(iso.zoom_level);
+    iso.scale += (target_scale - iso.scale) * (dt * 12.0).min(1.0);
 
     // Follow the player tank: ease the focus toward it, plus any manual pan
     // (e.g. two-finger drag on mobile) as an offset.

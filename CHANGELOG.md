@@ -3,6 +3,25 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.5.0] - 2026-07-19
+
+### Added
+- **Target marker**: requesting a main-gun shot drops a ring marker on the aimed
+  ground point; it disappears the moment the shell leaves the barrel. The gun
+  also commits to that point while laying, so the shell lands where you clicked.
+- **Smoldering craters**: shell impacts leave a scorched crater that glows and
+  smokes for a while, then cools to a dark scar that stays.
+- **Persistent wreckage**: debris and craters are no longer despawned on a timer
+  — they linger as scenery, recycled only when a fixed budget (600) is exceeded.
+- **Smoking debris**: about half of each blast's shards trail smoke for a few
+  seconds.
+- **10 discrete zoom levels** (was effectively a few), stepped by the wheel or
+  `Z`/`X`, with a smooth ease between levels.
+
+### Changed
+- Projectiles (shell, tracers) and the crater/ember are now polygons, not
+  spheres — polygons everywhere unless gradient circles are requested.
+
 ## [0.4.0] - 2026-07-19
 
 ### Added
