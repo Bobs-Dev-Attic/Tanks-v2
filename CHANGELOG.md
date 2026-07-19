@@ -3,6 +3,15 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.8.1] - 2026-07-19
+
+### Changed
+- **Lighting pass.** The scene was washed out because the ambient light was very
+  bright and flat. Ambient is now lower and cooler, and the sun is stronger, a
+  touch warmer, and lower on the horizon — so the low-poly terrain and tanks pick
+  up real directional shading and longer shadows, reading with depth instead of
+  flatness (while keeping the grass green).
+
 ## [0.8.0] - 2026-07-19
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "tanks-v2"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "WWII low-poly isometric tank squad commander built with Bevy, deployable to the web."
 authors = ["Tanks-v2"]
