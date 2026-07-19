@@ -1,28 +1,30 @@
-//! Procedural low-poly WWII tanks and their tread animation.
-//!
-//! Each tank is assembled from primitive meshes (no external models) so the
-//! whole game ships as a single self-contained wasm binary. Treads use a
-//! repeating stripe texture that scrolls with speed, and the road wheels spin,
-//! selling the tracked-vehicle motion.
+//! Procedural low-poly WWII tanks with a detailed hull, gradient-shaded armor,
+//! and running gear that mimics real tracks: drive sprocket, idler, road wheels,
+//! and return rollers all spin at speeds set by their radius, while cleated
+//! track links march around the bottom run and the track band scrolls.
 
 use crate::control::PlayerControlled;
 use crate::physics::Vehicle;
 use crate::terrain::Terrain;
-use crate::weapons::{GunMount, Muzzle, Turret, Weapons};
+use crate::weapons::{GunMount, Muzzle, Shake, Turret, Weapons};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
+use bevy::render::mesh::VertexAttributeValues;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::f32::consts::FRAC_PI_2;
 
-const WHEEL_RADIUS: f32 = 0.45;
+/// Length of the visible bottom track run (where links march and wrap).
+const TRACK_RUN: f32 = 4.8;
+/// Track centre line offset from the hull centre.
+const TRACK_X: f32 = 1.45;
 
 pub struct TankPlugin;
 
 impl Plugin for TankPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_training_mission)
-            .add_systems(Update, animate_treads);
+            .add_systems(Update, animate_tracks);
     }
 }
 
@@ -32,25 +34,23 @@ pub enum Team {
     Enemy,
 }
 
-/// Root marker for a tank.
 #[derive(Component)]
 pub struct Tank {
     pub team: Team,
 }
 
-/// Handles/entities needed to animate a specific tank instance.
+/// Everything needed to animate one tank's running gear.
 #[derive(Component)]
 pub struct TankVisual {
     tread_material: Handle<StandardMaterial>,
-    wheels: Vec<Entity>,
-    spin: f32,
+    /// Rolling wheels as (entity, radius); angular speed = distance / radius.
+    wheels: Vec<(Entity, f32)>,
+    /// Track-link cleats as (entity, base position along the run).
+    links: Vec<(Entity, f32)>,
+    /// Distance the tracks have travelled, for wheel spin and link marching.
+    distance: f32,
 }
 
-/// A spinning road wheel.
-#[derive(Component)]
-pub struct RoadWheel;
-
-/// Training mission: a single tank the player drives with the keyboard.
 fn spawn_training_mission(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -58,27 +58,10 @@ fn spawn_training_mission(
     mut images: ResMut<Assets<Image>>,
     terrain: Option<Res<Terrain>>,
 ) {
-    // Shared meshes reused by every tank.
-    let hull_mesh = meshes.add(Cuboid::new(2.8, 1.0, 4.8));
-    let turret_mesh = meshes.add(Cuboid::new(2.0, 0.8, 2.2));
-    let mantlet_mesh = meshes.add(Cuboid::new(1.2, 0.7, 0.5));
-    let barrel_mesh = meshes.add(Cylinder::new(0.12, 2.8));
-    let tread_mesh = meshes.add(Cuboid::new(0.75, 0.75, 5.2));
-    let wheel_mesh = meshes.add(Cylinder::new(WHEEL_RADIUS, 0.32));
-    let cupola_mesh = meshes.add(Cuboid::new(0.7, 0.4, 0.7));
-
-    let tread_tex = tread_texture(&mut images);
-    let detail_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.12, 0.12, 0.13),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
-
     let center = terrain
         .as_ref()
         .map(|t| t.spawn_area_center())
         .unwrap_or(Vec2::ZERO);
-    // Start resting on the ground (or just above; physics snaps it down).
     let ground = terrain
         .as_ref()
         .map(|t| t.height_at(center.x, center.y))
@@ -86,18 +69,9 @@ fn spawn_training_mission(
 
     spawn_tank(
         &mut commands,
-        SpawnAssets {
-            hull_mesh: &hull_mesh,
-            turret_mesh: &turret_mesh,
-            mantlet_mesh: &mantlet_mesh,
-            barrel_mesh: &barrel_mesh,
-            tread_mesh: &tread_mesh,
-            wheel_mesh: &wheel_mesh,
-            cupola_mesh: &cupola_mesh,
-            tread_tex: &tread_tex,
-            detail_mat: &detail_mat,
-        },
+        &mut meshes,
         &mut materials,
+        &mut images,
         center,
         ground + 0.6,
         0.0,
@@ -105,31 +79,40 @@ fn spawn_training_mission(
     );
 }
 
-/// Bundle of shared asset handles passed to [`spawn_tank`].
-struct SpawnAssets<'a> {
-    hull_mesh: &'a Handle<Mesh>,
-    turret_mesh: &'a Handle<Mesh>,
-    mantlet_mesh: &'a Handle<Mesh>,
-    barrel_mesh: &'a Handle<Mesh>,
-    tread_mesh: &'a Handle<Mesh>,
-    wheel_mesh: &'a Handle<Mesh>,
-    cupola_mesh: &'a Handle<Mesh>,
-    tread_tex: &'a Handle<Image>,
-    detail_mat: &'a Handle<StandardMaterial>,
-}
-
 fn spawn_tank(
     commands: &mut Commands,
-    assets: SpawnAssets,
+    meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
     ground_xz: Vec2,
     start_y: f32,
     yaw: f32,
     team: Team,
 ) {
+    // --- Meshes ---
+    let hull_mesh = meshes.add(gradient_box(2.8, 1.0, 4.8, 1.15, 0.6));
+    let glacis_mesh = meshes.add(gradient_box(2.7, 0.95, 0.16, 1.2, 0.7));
+    let deck_mesh = meshes.add(gradient_box(2.5, 0.18, 2.0, 1.05, 0.75));
+    let fender_mesh = meshes.add(Cuboid::new(0.95, 0.1, 5.2));
+    let turret_mesh = meshes.add(gradient_box(2.0, 0.8, 2.2, 1.15, 0.65));
+    let bustle_mesh = meshes.add(gradient_box(1.5, 0.55, 0.7, 1.05, 0.75));
+    let mantlet_mesh = meshes.add(gradient_box(1.2, 0.75, 0.5, 1.1, 0.7));
+    let barrel_mesh = meshes.add(Cylinder::new(0.12, 2.8));
+    let brake_mesh = meshes.add(Cuboid::new(0.34, 0.34, 0.5));
+    let hatch_mesh = meshes.add(Cylinder::new(0.3, 0.14));
+    let antenna_mesh = meshes.add(Cylinder::new(0.03, 2.2));
+    let exhaust_mesh = meshes.add(Cylinder::new(0.11, 0.9));
+    let headlight_mesh = meshes.add(Cuboid::new(0.22, 0.22, 0.12));
+    let band_mesh = meshes.add(Cuboid::new(0.78, 0.55, 5.0));
+    let sprocket_mesh = meshes.add(Cylinder::new(0.55, 0.36));
+    let roadwheel_mesh = meshes.add(Cylinder::new(0.42, 0.32));
+    let roller_mesh = meshes.add(Cylinder::new(0.18, 0.28));
+    let link_mesh = meshes.add(Cuboid::new(0.82, 0.14, 0.34));
+
+    // --- Materials ---
     let body_color = match team {
-        Team::Player => Color::srgb(0.30, 0.35, 0.18),
-        Team::Enemy => Color::srgb(0.30, 0.31, 0.34),
+        Team::Player => Color::srgb(0.32, 0.37, 0.2),
+        Team::Enemy => Color::srgb(0.31, 0.32, 0.35),
     };
     let hull_mat = materials.add(StandardMaterial {
         base_color: body_color,
@@ -137,23 +120,45 @@ fn spawn_tank(
         metallic: 0.05,
         ..default()
     });
-    // Per-instance tread material so each tank scrolls at its own speed.
+    let accent_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.22, 0.25, 0.14),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+    let metal_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.14, 0.14, 0.15),
+        perceptual_roughness: 0.7,
+        metallic: 0.4,
+        ..default()
+    });
+    let dark_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.08, 0.08, 0.09),
+        perceptual_roughness: 1.0,
+        ..default()
+    });
+    let light_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.85, 0.7),
+        emissive: LinearRgba::rgb(0.9, 0.85, 0.5),
+        ..default()
+    });
+    let tread_tex = tread_texture(images);
     let tread_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.5, 0.5, 0.52),
-        base_color_texture: Some(assets.tread_tex.clone()),
+        base_color: Color::srgb(0.4, 0.4, 0.42),
+        base_color_texture: Some(tread_tex),
         perceptual_roughness: 1.0,
         ..default()
     });
 
     let start = Vec3::new(ground_xz.x, start_y, ground_xz.y);
-
     let mut vehicle = Vehicle::default();
     vehicle.yaw = yaw;
     if team == Team::Enemy {
-        vehicle.max_speed = 0.0; // enemies hold position for this slice
+        vehicle.max_speed = 0.0;
     }
 
-    let mut wheels = Vec::new();
+    let mut wheels: Vec<(Entity, f32)> = Vec::new();
+    let mut links: Vec<(Entity, f32)> = Vec::new();
+
     let root = commands
         .spawn((
             Tank { team },
@@ -165,37 +170,73 @@ fn spawn_tank(
         .id();
 
     commands.entity(root).with_children(|p| {
-        // Hull.
+        // --- Hull & armor ---
         p.spawn((
-            Mesh3d(assets.hull_mesh.clone()),
+            Mesh3d(hull_mesh.clone()),
             MeshMaterial3d(hull_mat.clone()),
             Transform::from_xyz(0.0, 0.75, 0.0),
         ));
-        // Treads (left / right).
-        for side in [-1.0f32, 1.0] {
+        // Sloped front glacis.
+        p.spawn((
+            Mesh3d(glacis_mesh.clone()),
+            MeshMaterial3d(hull_mat.clone()),
+            Transform::from_xyz(0.0, 0.75, 2.45).with_rotation(Quat::from_rotation_x(-0.6)),
+        ));
+        // Engine deck.
+        p.spawn((
+            Mesh3d(deck_mesh.clone()),
+            MeshMaterial3d(accent_mat.clone()),
+            Transform::from_xyz(0.0, 1.28, -1.3),
+        ));
+        // Fenders over each track.
+        for s in [-1.0f32, 1.0] {
             p.spawn((
-                Mesh3d(assets.tread_mesh.clone()),
-                MeshMaterial3d(tread_material.clone()),
-                Transform::from_xyz(side * 1.45, 0.4, 0.0),
+                Mesh3d(fender_mesh.clone()),
+                MeshMaterial3d(accent_mat.clone()),
+                Transform::from_xyz(s * TRACK_X, 1.05, 0.0),
             ));
         }
-        // Rotating turret assembly. The turret pivot yaws (traverse); a nested
-        // gun-mount pivot at the trunnion pitches (elevation). Turret box and
-        // cupola yaw only; the mantlet, barrel, and muzzle elevate with the gun.
+        // Headlights and exhausts.
+        for s in [-1.0f32, 1.0] {
+            p.spawn((
+                Mesh3d(headlight_mesh.clone()),
+                MeshMaterial3d(light_mat.clone()),
+                Transform::from_xyz(s * 0.95, 1.02, 2.45),
+            ));
+            p.spawn((
+                Mesh3d(exhaust_mesh.clone()),
+                MeshMaterial3d(metal_mat.clone()),
+                Transform::from_xyz(s * 1.0, 1.1, -2.5)
+                    .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+            ));
+        }
+
+        // --- Turret assembly (yaw) with nested gun mount (pitch) ---
         p.spawn((Transform::default(), Visibility::default(), Turret::new(0.9)))
             .with_children(|t| {
                 t.spawn((
-                    Mesh3d(assets.turret_mesh.clone()),
+                    Mesh3d(turret_mesh.clone()),
                     MeshMaterial3d(hull_mat.clone()),
                     Transform::from_xyz(0.0, 1.55, 0.2),
                 ));
+                // Rear stowage bustle.
                 t.spawn((
-                    Mesh3d(assets.cupola_mesh.clone()),
-                    MeshMaterial3d(hull_mat.clone()),
-                    Transform::from_xyz(0.45, 2.05, 0.7),
+                    Mesh3d(bustle_mesh.clone()),
+                    MeshMaterial3d(accent_mat.clone()),
+                    Transform::from_xyz(0.0, 1.5, 1.45),
                 ));
-                // Gun mount pivots at the trunnion (0, 1.5, -0.9); its children
-                // are positioned relative to that point.
+                // Commander's hatch and antenna.
+                t.spawn((
+                    Mesh3d(hatch_mesh.clone()),
+                    MeshMaterial3d(accent_mat.clone()),
+                    Transform::from_xyz(0.45, 2.0, 0.5),
+                ));
+                t.spawn((
+                    Mesh3d(antenna_mesh.clone()),
+                    MeshMaterial3d(dark_mat.clone()),
+                    Transform::from_xyz(0.8, 3.0, 0.6),
+                ));
+                // Gun mount at the trunnion.
                 t.spawn((
                     Transform::from_xyz(0.0, 1.5, -0.9),
                     Visibility::default(),
@@ -203,33 +244,64 @@ fn spawn_tank(
                 ))
                 .with_children(|g| {
                     g.spawn((
-                        Mesh3d(assets.mantlet_mesh.clone()),
+                        Mesh3d(mantlet_mesh.clone()),
                         MeshMaterial3d(hull_mat.clone()),
                         Transform::default(),
                     ));
                     g.spawn((
-                        Mesh3d(assets.barrel_mesh.clone()),
-                        MeshMaterial3d(assets.detail_mat.clone()),
+                        Mesh3d(barrel_mesh.clone()),
+                        MeshMaterial3d(metal_mat.clone()),
                         Transform::from_xyz(0.0, 0.0, -1.5)
                             .with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
                     ));
-                    g.spawn((Transform::from_xyz(0.0, 0.0, -3.0), Muzzle));
+                    // Muzzle brake at the tip.
+                    g.spawn((
+                        Mesh3d(brake_mesh.clone()),
+                        MeshMaterial3d(metal_mat.clone()),
+                        Transform::from_xyz(0.0, 0.0, -2.85),
+                    ));
+                    g.spawn((Transform::from_xyz(0.0, 0.0, -3.1), Muzzle));
                 });
             });
-        // Road wheels along each track.
-        for side in [-1.0f32, 1.0] {
+
+        // --- Running gear per side ---
+        for s in [-1.0f32, 1.0] {
+            let x = s * TRACK_X;
+            // Track band (textured, scrolls).
+            p.spawn((
+                Mesh3d(band_mesh.clone()),
+                MeshMaterial3d(tread_material.clone()),
+                Transform::from_xyz(x, 0.42, 0.0),
+            ));
+            // Drive sprocket (front) and idler (rear) — larger.
+            for (z, _name) in [(2.4, "sprocket"), (-2.4, "idler")] {
+                let e = wheel_entity(p, &sprocket_mesh, &dark_mat, x, 0.55, z);
+                wheels.push((e, 0.55));
+            }
+            // Road wheels.
             for k in 0..5 {
-                let z = -2.0 + k as f32 * 1.0;
+                let z = -1.6 + k as f32 * 0.8;
+                let e = wheel_entity(p, &roadwheel_mesh, &metal_mat, x, 0.45, z);
+                wheels.push((e, 0.42));
+            }
+            // Return rollers on the top run.
+            for z in [-0.9f32, 0.9] {
+                let e = wheel_entity(p, &roller_mesh, &metal_mat, x, 1.05, z);
+                wheels.push((e, 0.18));
+            }
+            // Marching cleats on the bottom run.
+            let count = 10;
+            for i in 0..count {
+                let base = i as f32 / count as f32 * TRACK_RUN;
+                let z = base - TRACK_RUN * 0.5;
                 let e = p
                     .spawn((
-                        Mesh3d(assets.wheel_mesh.clone()),
-                        MeshMaterial3d(assets.detail_mat.clone()),
-                        Transform::from_xyz(side * 1.45, 0.4, z)
-                            .with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
-                        RoadWheel,
+                        Mesh3d(link_mesh.clone()),
+                        MeshMaterial3d(dark_mat.clone()),
+                        Transform::from_xyz(x, 0.12, z),
                     ))
                     .id();
-                wheels.push(e);
+                links.push((e, base));
             }
         }
     });
@@ -237,52 +309,98 @@ fn spawn_tank(
     commands.entity(root).insert(TankVisual {
         tread_material,
         wheels,
-        spin: 0.0,
+        links,
+        distance: 0.0,
     });
 
     if team == Team::Player {
         commands
             .entity(root)
-            .insert((PlayerControlled, Weapons::default()));
+            .insert((PlayerControlled, Weapons::default(), Shake::default()));
     }
 }
 
-/// Scroll tread textures and spin road wheels in proportion to ground speed.
-fn animate_treads(
+/// Spawn one rolling wheel laid on its side (axle across the hull) and return it.
+fn wheel_entity(
+    p: &mut ChildBuilder,
+    mesh: &Handle<Mesh>,
+    mat: &Handle<StandardMaterial>,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> Entity {
+    p.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_xyz(x, y, z).with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
+    ))
+    .id()
+}
+
+/// Spin the running gear and march the track links in step with ground speed.
+fn animate_tracks(
     time: Res<Time>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut tanks: Query<(&Vehicle, &mut TankVisual)>,
-    mut wheels: Query<&mut Transform, With<RoadWheel>>,
+    mut transforms: Query<&mut Transform>,
 ) {
     let dt = time.delta_secs();
     for (vehicle, mut visual) in &mut tanks {
-        visual.spin += vehicle.forward_speed * dt / WHEEL_RADIUS;
+        visual.distance += vehicle.forward_speed * dt;
+        let distance = visual.distance;
+
         if let Some(mat) = materials.get_mut(&visual.tread_material) {
             mat.uv_transform.translation.y -= vehicle.forward_speed * dt * 0.18;
         }
-        // Roll about the wheel's own axle (the cylinder's central axis, local
-        // Y) — then lay it on its side so the axle points across the hull.
-        let rot = Quat::from_rotation_z(FRAC_PI_2) * Quat::from_rotation_y(visual.spin);
-        for &wheel in &visual.wheels {
-            if let Ok(mut transform) = wheels.get_mut(wheel) {
-                transform.rotation = rot;
+
+        // Wheels roll: angular speed scales inversely with radius.
+        for &(wheel, radius) in &visual.wheels {
+            if let Ok(mut tf) = transforms.get_mut(wheel) {
+                let angle = distance / radius;
+                tf.rotation = Quat::from_rotation_z(FRAC_PI_2) * Quat::from_rotation_y(angle);
+            }
+        }
+        // Links march along the bottom run and wrap continuously.
+        for &(link, base) in &visual.links {
+            if let Ok(mut tf) = transforms.get_mut(link) {
+                tf.translation.z = (base - distance).rem_euclid(TRACK_RUN) - TRACK_RUN * 0.5;
             }
         }
     }
 }
 
-/// Build a small repeating stripe texture that reads as tank-track cleats.
+/// A cuboid with a top-to-bottom grayscale gradient baked into vertex colors,
+/// so flat armor plates read with shaded depth (multiplied by the material).
+fn gradient_box(x: f32, y: f32, z: f32, top: f32, bottom: f32) -> Mesh {
+    let mut mesh: Mesh = Cuboid::new(x, y, z).into();
+    if let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    {
+        let half = y * 0.5;
+        let colors: Vec<[f32; 4]> = positions
+            .iter()
+            .map(|pos| {
+                let t = ((pos[1] + half) / y).clamp(0.0, 1.0);
+                let g = bottom + (top - bottom) * t;
+                [g, g, g, 1.0]
+            })
+            .collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
+    mesh
+}
+
+/// A small repeating stripe texture that reads as track cleats on the band.
 fn tread_texture(images: &mut Assets<Image>) -> Handle<Image> {
-    let w = 8u32;
-    let h = 8u32;
+    let (w, h) = (8u32, 8u32);
     let mut data = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         for _x in 0..w {
             let cleat = (y / 2) % 2 == 0;
             let c: [u8; 4] = if cleat {
-                [38, 38, 42, 255]
+                [34, 34, 38, 255]
             } else {
-                [66, 66, 70, 255]
+                [70, 70, 74, 255]
             };
             data.extend_from_slice(&c);
         }

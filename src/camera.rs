@@ -44,8 +44,8 @@ impl Default for IsoCamera {
     }
 }
 
-const MIN_SCALE: f32 = 14.0;
-const MAX_SCALE: f32 = 200.0;
+const MIN_SCALE: f32 = 7.0;
+const MAX_SCALE: f32 = 400.0;
 const MIN_PITCH: f32 = 12.0_f32 * std::f32::consts::PI / 180.0;
 const MAX_PITCH: f32 = 82.0_f32 * std::f32::consts::PI / 180.0;
 
@@ -82,8 +82,8 @@ fn drive_camera(
     iso.yaw -= input.orbit.x.to_radians();
     iso.pitch = (iso.pitch - input.orbit.y.to_radians()).clamp(MIN_PITCH, MAX_PITCH);
 
-    // Zoom (scale shrinks as we zoom in).
-    iso.scale = (iso.scale - input.zoom).clamp(MIN_SCALE, MAX_SCALE);
+    // Zoom multiplicatively so it feels consistent across the wide range.
+    iso.scale = (iso.scale * (1.0 - input.zoom * 0.03)).clamp(MIN_SCALE, MAX_SCALE);
 
     // Follow the player tank: ease the focus toward it, plus any manual pan
     // (e.g. two-finger drag on mobile) as an offset.
