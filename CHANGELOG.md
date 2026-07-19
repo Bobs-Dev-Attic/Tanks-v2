@@ -3,6 +3,17 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.8.0] - 2026-07-19
+
+### Added
+- **Enemies shoot back.** The German panzers now acquire the player, traverse
+  their turrets and lay their guns on him (using the same terrain-aware ballistic
+  solver), and fire back on a reload cadence within range. Their aim has a little
+  spread so they miss more at distance, and their shells hit softer than yours, so
+  a few tanks firing back stays survivable. Enemy hits damage the player through
+  the existing damage system — the hull chars, mobility and gunnery degrade, and a
+  knocked-out player brews up like any other tank.
+
 ## [0.7.6] - 2026-07-19
 
 ### Changed
