@@ -3,6 +3,19 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.3.0] - 2026-07-19
+
+### Changed
+- **Realistic gun laying.** The turret now traverses toward the aim point at a
+  fixed rate (per-tank, and scaled by the vehicle's `condition` so a damaged tank
+  is slower), instead of snapping. The main gun auto-elevates to the ballistic
+  angle that best hits the target (45° / max range when out of reach).
+- **Fire is a request.** Pressing the main-gun fire button *requests* a shot; the
+  gun fires only once it is loaded, the turret is on target, and the gun is laid
+  at the right elevation. Shells fire along the actual gun line and arc to the
+  target under gravity.
+- The gun elevates on a separate mount from the turret's traverse.
+
 ## [0.2.1] - 2026-07-19
 
 ### Added

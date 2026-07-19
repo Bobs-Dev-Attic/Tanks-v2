@@ -1,8 +1,11 @@
-//! Turret aiming and the two weapons.
+//! Turret traverse, gun laying, and the two weapons.
 //!
-//! The turret yaws to follow the mouse cursor's point on the ground. The main
-//! gun (E / left mouse) lobs a shell that explodes on impact; the machine gun
-//! (Q / right mouse) sprays fast tracers that kick up dust.
+//! The turret yaws toward the aim point at a fixed traverse rate, and the gun
+//! auto-elevates to the ballistic angle that best hits the target. Pressing
+//! FIRE only *requests* a shot — the gun actually fires once it is loaded and
+//! laid on target (turret aligned and gun at the right elevation). Rates scale
+//! with the crew/vehicle `condition`, so a damaged or heavier tank lays and
+//! reloads more slowly.
 
 use crate::camera::IsoCamera;
 use crate::control::PlayerControlled;
@@ -10,7 +13,17 @@ use crate::effects::{spawn_explosion, spawn_impact_puff, EffectAssets};
 use crate::input::GameInput;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
+use std::f32::consts::{FRAC_PI_4, PI, TAU};
 use std::time::Duration;
+
+/// Muzzle velocity of a main-gun shell (world units / second).
+const SHELL_SPEED: f32 = 90.0;
+/// Gravity applied to shells (must match the ballistic solver).
+const SHELL_GRAVITY: f32 = 30.0;
+/// Turret is "on target" within this yaw error (radians).
+const YAW_TOL: f32 = 0.03;
+/// Gun is "laid" within this elevation error (radians).
+const ELEV_TOL: f32 = 0.02;
 
 pub struct WeaponsPlugin;
 
@@ -18,34 +31,83 @@ impl Plugin for WeaponsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_weapon_assets).add_systems(
             Update,
-            (aim_turret, fire_weapons, update_projectiles),
+            (operate_main_gun, fire_machine_gun, update_projectiles),
         );
     }
 }
 
-/// Rotating turret pivot (parent of turret box, gun, and muzzle).
+/// Rotating turret pivot. Traverses toward the aim at `rate` rad/s.
 #[derive(Component)]
-pub struct Turret;
+pub struct Turret {
+    /// Traverse rate in radians per second.
+    rate: f32,
+    /// Current yaw in the hull's local frame.
+    yaw: f32,
+    /// Whether the turret is currently on target.
+    aligned: bool,
+}
 
-/// Empty marker at the gun's muzzle; its `GlobalTransform` is the spawn point.
+impl Turret {
+    pub fn new(rate: f32) -> Self {
+        Self {
+            rate,
+            yaw: 0.0,
+            aligned: false,
+        }
+    }
+}
+
+/// Gun-elevation pivot. Pitches toward the ballistic angle at `rate` rad/s.
+#[derive(Component)]
+pub struct GunMount {
+    rate: f32,
+    min: f32,
+    max: f32,
+    elev: f32,
+    aligned: bool,
+}
+
+impl GunMount {
+    pub fn new(rate: f32) -> Self {
+        Self {
+            rate,
+            min: -0.09,      // ~ -5° depression
+            max: FRAC_PI_4,  // 45° for maximum range
+            elev: 0.0,
+            aligned: false,
+        }
+    }
+}
+
+/// Empty marker at the gun muzzle; its `GlobalTransform` is the shot origin.
 #[derive(Component)]
 pub struct Muzzle;
 
-/// Per-tank weapon cooldowns.
+/// Per-tank weapon state.
 #[derive(Component)]
 pub struct Weapons {
+    /// Main-gun reload timer (loaded when finished).
     main: Timer,
+    /// Machine-gun cadence timer.
     mg: Timer,
+    /// A pending "fire the main gun" request, honored when laid and loaded.
+    fire_requested: bool,
+    /// Crew/vehicle condition in 0..1; scales traverse, elevation, and reload.
+    condition: f32,
 }
 
 impl Default for Weapons {
     fn default() -> Self {
-        // Start finished so the first shot is immediate.
-        let mut main = Timer::from_seconds(1.1, TimerMode::Once);
-        main.tick(Duration::from_secs(5));
+        let mut main = Timer::from_seconds(2.5, TimerMode::Once);
+        main.tick(Duration::from_secs(5)); // start loaded
         let mut mg = Timer::from_seconds(0.09, TimerMode::Once);
         mg.tick(Duration::from_secs(5));
-        Self { main, mg }
+        Self {
+            main,
+            mg,
+            fire_requested: false,
+            condition: 1.0,
+        }
     }
 }
 
@@ -94,44 +156,93 @@ fn setup_weapon_assets(
     });
 }
 
-/// Yaw each turret to face the aim point (mouse cursor or right-side touch).
-fn aim_turret(
+/// Traverse the turret, lay the gun, and fire the main gun when ready.
+fn operate_main_gun(
+    mut commands: Commands,
     time: Res<Time>,
     input: Res<GameInput>,
     cameras: Query<(&Camera, &GlobalTransform), With<IsoCamera>>,
     terrain: Option<Res<Terrain>>,
-    parents: Query<&GlobalTransform>,
-    mut turrets: Query<(&Parent, &mut Transform), With<Turret>>,
+    assets: Res<WeaponAssets>,
+    muzzles: Query<&GlobalTransform, With<Muzzle>>,
+    mut roots: Query<(&GlobalTransform, &mut Weapons), With<PlayerControlled>>,
+    mut turrets: Query<(&mut Transform, &mut Turret), Without<GunMount>>,
+    mut guns: Query<(&mut Transform, &mut GunMount), Without<Turret>>,
 ) {
-    let (Some(terrain), Ok((camera, cam_tf))) = (terrain, cameras.get_single()) else {
-        return;
-    };
-    let Some(screen) = input.aim else {
-        return;
-    };
-    let Some(target) = cursor_ground(screen, camera, cam_tf, &terrain) else {
+    let (Ok((root_gt, mut weapon)), Ok((mut turret_tf, mut turret)), Ok((mut gun_tf, mut gun))) = (
+        roots.get_single_mut(),
+        turrets.get_single_mut(),
+        guns.get_single_mut(),
+    ) else {
         return;
     };
 
-    let blend = (time.delta_secs() * 10.0).min(1.0);
-    for (parent, mut tf) in &mut turrets {
-        let Ok(parent_gt) = parents.get(parent.get()) else {
-            continue;
-        };
-        let (_, parent_rot, parent_pos) = parent_gt.to_scale_rotation_translation();
-        let mut dir = target - parent_pos;
-        dir.y = 0.0;
-        if dir.length_squared() < 0.05 {
-            continue;
+    let dt = time.delta_secs().min(1.0 / 20.0);
+    let cond = weapon.condition.clamp(0.05, 1.0);
+    // Reload progresses slower when the tank is in poor condition.
+    weapon.main.tick(Duration::from_secs_f32(dt * cond));
+
+    let target = input
+        .aim
+        .zip(cameras.get_single().ok())
+        .zip(terrain.as_ref())
+        .and_then(|((screen, (camera, cam_tf)), t)| cursor_ground(screen, camera, cam_tf, t));
+
+    let (_, root_rot, root_pos) = root_gt.to_scale_rotation_translation();
+
+    if let Some(tp) = target {
+        // --- Turret traverse (yaw in the hull's local frame) ---
+        let local = root_rot.inverse() * (tp - root_pos);
+        let desired_yaw = (-local.x).atan2(-local.z);
+        let yaw_step = turret.rate * cond * dt;
+        turret.yaw = step_angle(turret.yaw, desired_yaw, yaw_step);
+        turret_tf.rotation = Quat::from_rotation_y(turret.yaw);
+        turret.aligned = wrap_pi(desired_yaw - turret.yaw).abs() < YAW_TOL;
+
+        // --- Gun laying (ballistic elevation) ---
+        let muzzle_pos = muzzles
+            .get_single()
+            .map(|m| m.translation())
+            .unwrap_or(root_pos + Vec3::Y * 1.6);
+        let flat = Vec2::new(tp.x - muzzle_pos.x, tp.z - muzzle_pos.z)
+            .length()
+            .max(1.0);
+        let rise = tp.y - muzzle_pos.y;
+        let desired_elev =
+            ballistic_angle(flat, rise, SHELL_SPEED, SHELL_GRAVITY).clamp(gun.min, gun.max);
+        let elev_step = gun.rate * cond * dt;
+        gun.elev = step_toward(gun.elev, desired_elev, elev_step);
+        gun_tf.rotation = Quat::from_rotation_x(gun.elev);
+        gun.aligned = (gun.elev - desired_elev).abs() < ELEV_TOL;
+    } else {
+        turret.aligned = false;
+        gun.aligned = false;
+    }
+
+    // --- Fire control: request now, shoot when laid and loaded ---
+    if input.fire_main {
+        weapon.fire_requested = true;
+    }
+    if weapon.fire_requested && weapon.main.finished() && turret.aligned && gun.aligned {
+        if let Ok(muzzle) = muzzles.get_single() {
+            let (_, muzzle_rot, muzzle_pos) = muzzle.to_scale_rotation_translation();
+            let forward = muzzle_rot * Vec3::NEG_Z;
+            commands.spawn((
+                Mesh3d(assets.shell_mesh.clone()),
+                MeshMaterial3d(assets.shell_mat.clone()),
+                Transform::from_translation(muzzle_pos),
+                Shell {
+                    vel: forward * SHELL_SPEED,
+                },
+            ));
+            weapon.main.reset();
+            weapon.fire_requested = false;
         }
-        // Desired world rotation, then express it in the hull's local frame.
-        let desired = Transform::IDENTITY.looking_to(dir.normalize(), Vec3::Y).rotation;
-        let local = parent_rot.inverse() * desired;
-        tf.rotation = tf.rotation.slerp(local, blend);
     }
 }
 
-fn fire_weapons(
+/// The machine gun sprays tracers toward the aim point; direct fire, no waiting.
+fn fire_machine_gun(
     mut commands: Commands,
     time: Res<Time>,
     input: Res<GameInput>,
@@ -141,56 +252,41 @@ fn fire_weapons(
     muzzles: Query<&GlobalTransform, With<Muzzle>>,
     mut weapons: Query<&mut Weapons, With<PlayerControlled>>,
 ) {
-    let (Ok(muzzle), Ok(mut weapon)) = (muzzles.get_single(), weapons.get_single_mut()) else {
+    let (Ok(mut weapon), Ok(muzzle)) = (weapons.get_single_mut(), muzzles.get_single()) else {
         return;
     };
-    weapon.main.tick(time.delta());
     weapon.mg.tick(time.delta());
+    if !(input.fire_mg && weapon.mg.finished()) {
+        return;
+    }
+    weapon.mg.reset();
 
     let (_, muzzle_rot, muzzle_pos) = muzzle.to_scale_rotation_translation();
     let forward = muzzle_rot * Vec3::NEG_Z;
-
-    // Aim toward the aim point's ground position if we have one, else ahead.
     let aim_dir = input
         .aim
+        .zip(cameras.get_single().ok())
         .zip(terrain.as_ref())
-        .and_then(|(screen, t)| {
-            let (camera, cam_tf) = cameras.get_single().ok()?;
+        .and_then(|((screen, (camera, cam_tf)), t)| {
             let target = cursor_ground(screen, camera, cam_tf, t)?;
             (target - muzzle_pos).try_normalize()
         })
         .unwrap_or(forward);
 
-    if input.fire_main && weapon.main.finished() {
-        weapon.main.reset();
-        commands.spawn((
-            Mesh3d(assets.shell_mesh.clone()),
-            MeshMaterial3d(assets.shell_mat.clone()),
-            Transform::from_translation(muzzle_pos),
-            Shell {
-                vel: aim_dir * 95.0,
-            },
-        ));
-    }
-
-    if input.fire_mg && weapon.mg.finished() {
-        weapon.mg.reset();
-        // A little spread so it reads as a spraying MG.
-        let jitter = Vec3::new(
-            (time.elapsed_secs() * 91.0).sin() * 0.03,
-            0.0,
-            (time.elapsed_secs() * 57.0).cos() * 0.03,
-        );
-        commands.spawn((
-            Mesh3d(assets.tracer_mesh.clone()),
-            MeshMaterial3d(assets.tracer_mat.clone()),
-            Transform::from_translation(muzzle_pos),
-            Tracer {
-                vel: (aim_dir + jitter).normalize_or_zero() * 150.0,
-                life: 1.2,
-            },
-        ));
-    }
+    let jitter = Vec3::new(
+        (time.elapsed_secs() * 91.0).sin() * 0.03,
+        0.0,
+        (time.elapsed_secs() * 57.0).cos() * 0.03,
+    );
+    commands.spawn((
+        Mesh3d(assets.tracer_mesh.clone()),
+        MeshMaterial3d(assets.tracer_mat.clone()),
+        Transform::from_translation(muzzle_pos),
+        Tracer {
+            vel: (aim_dir + jitter).normalize_or_zero() * 150.0,
+            life: 1.2,
+        },
+    ));
 }
 
 fn update_projectiles(
@@ -210,7 +306,7 @@ fn update_projectiles(
     let mut seed = (time.elapsed_secs() * 977.0) as u32;
 
     for (entity, mut shell, mut tf) in &mut shells {
-        shell.vel.y -= 12.0 * dt; // light drop for a slight arc
+        shell.vel.y -= SHELL_GRAVITY * dt;
         tf.translation += shell.vel * dt;
         let ground = terrain.height_at(tf.translation.x, tf.translation.z);
         let out = tf.translation.x.abs() > limit || tf.translation.z.abs() > limit;
@@ -241,6 +337,43 @@ fn update_projectiles(
             commands.entity(entity).despawn_recursive();
         }
     }
+}
+
+/// Best-effort launch elevation to hit a target `x` ahead and `y` above the
+/// muzzle, given muzzle speed `v` and gravity `g`. Returns the low (direct-fire)
+/// solution, or 45° when the target is out of range.
+fn ballistic_angle(x: f32, y: f32, v: f32, g: f32) -> f32 {
+    let v2 = v * v;
+    let disc = v2 * v2 - g * (g * x * x + 2.0 * y * v2);
+    if disc < 0.0 {
+        return FRAC_PI_4;
+    }
+    ((v2 - disc.sqrt()) / (g * x)).atan()
+}
+
+/// Step `current` toward `target` (both radians) by at most `max_step`, taking
+/// the shortest way around the circle.
+fn step_angle(current: f32, target: f32, max_step: f32) -> f32 {
+    let diff = wrap_pi(target - current);
+    if diff.abs() <= max_step {
+        wrap_pi(target)
+    } else {
+        wrap_pi(current + max_step * diff.signum())
+    }
+}
+
+/// Step a non-wrapping scalar toward a target by at most `max_step`.
+fn step_toward(current: f32, target: f32, max_step: f32) -> f32 {
+    let diff = target - current;
+    if diff.abs() <= max_step {
+        target
+    } else {
+        current + max_step * diff.signum()
+    }
+}
+
+fn wrap_pi(a: f32) -> f32 {
+    (a + PI).rem_euclid(TAU) - PI
 }
 
 /// March a camera ray until it dips below the heightfield; bisect to refine.
