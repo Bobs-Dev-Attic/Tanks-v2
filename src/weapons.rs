@@ -41,6 +41,17 @@ const MG_ARC_COS: f32 = 0.5; // 60°
 const YAW_TOL: f32 = 0.03;
 /// Gun is "laid" within this elevation error (radians).
 const ELEV_TOL: f32 = 0.02;
+/// Enemy gunnery: engagement range, reload time, traverse/elevation rates, and
+/// the aim spread (radians) that makes their fire imperfect (more misses at
+/// longer range, so the player isn't instantly overwhelmed).
+const ENEMY_RANGE: f32 = 230.0;
+const ENEMY_RELOAD: f32 = 5.0;
+const ENEMY_TRAVERSE: f32 = 0.5;
+const ENEMY_GUN_RATE: f32 = 0.4;
+const ENEMY_SPREAD: f32 = 0.06;
+/// Enemy shells hit softer than the player's, so several tanks firing back stay
+/// survivable in the training mission.
+const ENEMY_DAMAGE: f32 = 26.0;
 
 pub struct WeaponsPlugin;
 
@@ -49,7 +60,13 @@ impl Plugin for WeaponsPlugin {
         app.add_systems(Startup, setup_weapon_assets)
             .add_systems(
                 Update,
-                (operate_main_gun, fire_machine_gun, update_projectiles, pulse_marker),
+                (
+                    operate_main_gun,
+                    enemy_ai,
+                    fire_machine_gun,
+                    update_projectiles,
+                    pulse_marker,
+                ),
             )
             // Shake is applied after physics has placed the hull, just before
             // transforms propagate, so the jitter is purely visual.
@@ -201,6 +218,38 @@ pub struct MarkerFading {
 #[derive(Component)]
 struct Shell {
     vel: Vec3,
+    /// True for enemy shells (they damage the player); false for the player's
+    /// shells (they damage enemy tanks).
+    hits_player: bool,
+    /// Peak HE damage at the point of impact (enemy shells hit softer).
+    damage: f32,
+}
+
+/// Fire-control for an enemy tank: the AI traverses `turret`, elevates `gun`,
+/// and fires shells from `muzzle` at the player. (Enemies deliberately do NOT
+/// carry the player's `Turret`/`GunMount`/`Muzzle` components, so the player's
+/// singleton weapon queries stay unique — this drives them by entity instead.)
+#[derive(Component)]
+pub struct EnemyGunner {
+    turret: Entity,
+    gun: Entity,
+    muzzle: Entity,
+    yaw: f32,
+    elev: f32,
+    reload: Timer,
+}
+
+impl EnemyGunner {
+    pub fn new(turret: Entity, gun: Entity, muzzle: Entity) -> Self {
+        Self {
+            turret,
+            gun,
+            muzzle,
+            yaw: 0.0,
+            elev: 0.0,
+            reload: Timer::from_seconds(ENEMY_RELOAD, TimerMode::Once),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -422,6 +471,8 @@ fn operate_main_gun(
                 Transform::from_translation(muzzle_pos),
                 Shell {
                     vel: forward * SHELL_SPEED,
+                    hits_player: false,
+                    damage: SHELL_DAMAGE,
                 },
             ));
             // Big muzzle flash, drifting gun smoke, recoil, and a hull shake.
@@ -447,6 +498,97 @@ fn operate_main_gun(
     // Recoil slides the gun back, then eases home.
     gun.recoil = (gun.recoil - gun.recoil * 9.0 * dt).max(0.0);
     gun_tf.translation = GUN_PIVOT + Vec3::Z * gun.recoil;
+}
+
+/// Enemy tanks acquire the player, traverse their turret and lay their gun on
+/// him (accounting for terrain via the same ballistic solver), and fire back on
+/// a reload cadence with a little aim spread so they aren't pin-point accurate.
+#[allow(clippy::too_many_arguments)]
+fn enemy_ai(
+    mut commands: Commands,
+    time: Res<Time>,
+    terrain: Option<Res<Terrain>>,
+    assets: Res<WeaponAssets>,
+    effects: Option<Res<EffectAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    player: Query<(&GlobalTransform, &Armor), With<PlayerControlled>>,
+    globals: Query<&GlobalTransform>,
+    mut gunners: Query<(&GlobalTransform, &mut EnemyGunner, &Armor), Without<PlayerControlled>>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let Ok((player_gt, player_armor)) = player.get_single() else {
+        return;
+    };
+    if player_armor.destroyed {
+        return;
+    }
+    let player_pos = player_gt.translation();
+    let dt = time.delta_secs().min(1.0 / 20.0);
+
+    for (enemy_gt, mut gunner, armor) in &mut gunners {
+        gunner.reload.tick(time.delta());
+        if armor.destroyed {
+            continue;
+        }
+        let (_, enemy_rot, enemy_pos) = enemy_gt.to_scale_rotation_translation();
+        let to_player = player_pos - enemy_pos;
+        if to_player.length() > ENEMY_RANGE {
+            continue;
+        }
+
+        // Traverse the turret toward the player in the hull's local frame.
+        let local = enemy_rot.inverse() * to_player;
+        let desired_yaw = (-local.x).atan2(-local.z);
+        gunner.yaw = step_angle(gunner.yaw, desired_yaw, ENEMY_TRAVERSE * dt);
+        if let Ok(mut t) = transforms.get_mut(gunner.turret) {
+            t.rotation = Quat::from_rotation_y(gunner.yaw);
+        }
+        let turret_aligned = wrap_pi(desired_yaw - gunner.yaw).abs() < 0.05;
+
+        // Lay the gun using the terrain-aware ballistic solver, from the muzzle.
+        let muzzle_pos = globals
+            .get(gunner.muzzle)
+            .map(|g| g.translation())
+            .unwrap_or(enemy_pos + Vec3::Y * 2.0);
+        let desired_elev = terrain
+            .as_ref()
+            .map(|t| {
+                solve_elevation(t, muzzle_pos, player_pos, SHELL_SPEED, SHELL_GRAVITY, -0.09, FRAC_PI_4)
+            })
+            .unwrap_or(0.0);
+        gunner.elev = step_toward(gunner.elev, desired_elev, ENEMY_GUN_RATE * dt);
+        if let Ok(mut g) = transforms.get_mut(gunner.gun) {
+            g.rotation = Quat::from_rotation_x(gunner.elev);
+        }
+        let gun_aligned = (gunner.elev - desired_elev).abs() < 0.03;
+
+        // Fire when loaded and laid on target.
+        if gunner.reload.finished() && turret_aligned && gun_aligned {
+            if let Ok(muzzle_gt) = globals.get(gunner.muzzle) {
+                let (_, mrot, mpos) = muzzle_gt.to_scale_rotation_translation();
+                // Aim spread: a small deterministic jitter that varies per shot.
+                let s = time.elapsed_secs() * 13.0 + mpos.x * 0.7 + mpos.z * 1.3;
+                let jitter = Vec3::new(s.sin(), (s * 0.5).sin() * 0.4, (s * 1.7).cos()) * ENEMY_SPREAD;
+                let dir = (mrot * Vec3::NEG_Z + jitter).normalize_or_zero();
+                commands.spawn((
+                    Mesh3d(assets.shell_mesh.clone()),
+                    MeshMaterial3d(assets.shell_mat.clone()),
+                    Transform::from_translation(mpos),
+                    Shell {
+                        vel: dir * SHELL_SPEED,
+                        hits_player: true,
+                        damage: ENEMY_DAMAGE,
+                    },
+                ));
+                if let Some(fx) = effects.as_ref() {
+                    let seed = (s * 131.0) as u32 | 1;
+                    spawn_muzzle_flash(&mut commands, fx, &mut materials, mpos, 2.0, seed);
+                    spawn_gun_smoke(&mut commands, fx, &mut materials, mpos, dir, seed ^ 0x7A);
+                }
+                gunner.reload.reset();
+            }
+        }
+    }
 }
 
 /// The hull machine gun fires short-range tracers forward from the front of the
@@ -523,7 +665,7 @@ fn update_projectiles(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut shells: Query<(Entity, &mut Shell, &mut Transform), Without<Tracer>>,
     mut tracers: Query<(Entity, &mut Tracer, &mut Transform), Without<Shell>>,
-    mut targets: Query<(&GlobalTransform, &mut Armor), (With<Tank>, Without<PlayerControlled>)>,
+    mut targets: Query<(&GlobalTransform, &mut Armor, Has<PlayerControlled>), With<Tank>>,
 ) {
     let Some(terrain) = terrain else {
         return;
@@ -535,10 +677,17 @@ fn update_projectiles(
     for (entity, mut shell, mut tf) in &mut shells {
         shell.vel.y -= SHELL_GRAVITY * dt;
         tf.translation += shell.vel * dt;
+        // This shell only affects its target team: enemy shells hit the player,
+        // the player's shells hit enemies.
+        let hits_player = shell.hits_player;
+        let shell_damage = shell.damage;
 
-        // A direct hit on an enemy tank's hull detonates the shell on contact.
+        // A direct hit on a target tank's hull detonates the shell on contact.
         let mut tank_hit = None;
-        for (etf, _) in targets.iter() {
+        for (etf, _, is_player) in targets.iter() {
+            if is_player != hits_player {
+                continue;
+            }
             let c = etf.translation();
             let flat = (tf.translation.x - c.x).hypot(tf.translation.z - c.z);
             let dy = tf.translation.y - c.y;
@@ -554,14 +703,15 @@ fn update_projectiles(
         if tank_hit.is_some() || hit_ground || out {
             let at = tank_hit.unwrap_or(Vec3::new(tf.translation.x, ground, tf.translation.z));
             // High-explosive splash: full damage at the impact, tapering to zero
-            // at the blast radius, so near-misses still hurt nearby tanks.
-            for (etf, mut armor) in targets.iter_mut() {
-                if armor.destroyed {
+            // at the blast radius, so near-misses still hurt nearby tanks — but
+            // only tanks on this shell's target team.
+            for (etf, mut armor, is_player) in targets.iter_mut() {
+                if is_player != hits_player || armor.destroyed {
                     continue;
                 }
                 let d = etf.translation().distance(at);
                 if d < SHELL_SPLASH {
-                    armor.damage(SHELL_DAMAGE * (1.0 - d / SHELL_SPLASH));
+                    armor.damage(shell_damage * (1.0 - d / SHELL_SPLASH));
                 }
             }
             if let Some(fx) = effects.as_ref() {

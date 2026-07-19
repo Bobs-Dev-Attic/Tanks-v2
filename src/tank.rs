@@ -8,7 +8,7 @@ use crate::control::PlayerControlled;
 use crate::effects::{spawn_dust, spawn_track_mark, EffectAssets, Wreckage};
 use crate::physics::Vehicle;
 use crate::terrain::Terrain;
-use crate::weapons::{GunMount, HullMg, Muzzle, Shake, Turret, Weapons};
+use crate::weapons::{EnemyGunner, GunMount, HullMg, Muzzle, Shake, Turret, Weapons};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::mesh::VertexAttributeValues;
@@ -212,6 +212,8 @@ fn spawn_tank(
     let mut wheels: Vec<(Entity, f32)> = Vec::new();
     let mut links: Vec<(Entity, f32)> = Vec::new();
     let mut turret_ent: Option<Entity> = None;
+    let mut gun_ent: Option<Entity> = None;
+    let mut muzzle_ent: Option<Entity> = None;
 
     let root = commands
         .spawn((
@@ -345,6 +347,7 @@ fn spawn_tank(
                 if is_player {
                     gun_ec.insert(GunMount::new(0.5));
                 }
+                gun_ent = Some(gun_ec.id());
                 gun_ec.with_children(|g| {
                     g.spawn((
                         Mesh3d(mantlet_mesh.clone()),
@@ -363,9 +366,16 @@ fn spawn_tank(
                         MeshMaterial3d(metal_mat.clone()),
                         Transform::from_xyz(0.0, 0.0, brake_z),
                     ));
-                    if is_player {
-                        g.spawn((Transform::from_xyz(0.0, 0.0, brake_z - 0.25), Muzzle));
-                    }
+                    // Muzzle point at the barrel tip. The player's carries the
+                    // `Muzzle` marker (its singleton drives the player's gun); the
+                    // enemy's is a bare point the AI fires from by entity id.
+                    let muzzle = if is_player {
+                        g.spawn((Transform::from_xyz(0.0, 0.0, brake_z - 0.25), Muzzle))
+                            .id()
+                    } else {
+                        g.spawn(Transform::from_xyz(0.0, 0.0, brake_z - 0.25)).id()
+                    };
+                    muzzle_ent = Some(muzzle);
                 });
             });
 
@@ -437,6 +447,9 @@ fn spawn_tank(
         commands
             .entity(root)
             .insert((PlayerControlled, Weapons::default(), Shake::default()));
+    } else if let (Some(t), Some(g), Some(m)) = (turret_ent, gun_ent, muzzle_ent) {
+        // Enemy tanks get fire-control so they can shoot back.
+        commands.entity(root).insert(EnemyGunner::new(t, g, m));
     }
 }
 
