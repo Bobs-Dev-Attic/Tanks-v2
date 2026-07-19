@@ -3,6 +3,19 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.1] - 2026-07-19
+
+### Changed
+- **Target indicator now sits on the ground surface**: it's a bright ring painted
+  flat on the terrain under the aim point, with a low translucent shockwave dome
+  over it, pinned to the ground (no more bubble floating above the target).
+
+### Fixed
+- **Designating near an enemy now targets that enemy**: clicking or double-tapping
+  close to an enemy tank snaps the aim to it (its base on the ground) instead of
+  the ground behind it that the ray happened to hit — so double-tap-to-fire near a
+  panzer reliably engages it.
+
 ## [0.7.0] - 2026-07-19
 
 ### Added
