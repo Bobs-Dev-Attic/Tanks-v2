@@ -66,6 +66,12 @@ pub struct GameInput {
 struct PointerState {
     left_down_pos: Option<Vec2>,
     left_dragging: bool,
+    /// Last two-finger distance, for pinch-to-zoom.
+    last_pinch: Option<f32>,
+    pinch_accum: f32,
+    /// Last single tap (position and time), for double-tap detection.
+    last_tap_pos: Option<Vec2>,
+    last_tap_time: f32,
 }
 
 /// Centre of the MG button for the given window size.
@@ -140,16 +146,56 @@ fn gather_input(
     }
     game.drive = drive.clamp(Vec2::splat(-1.0), Vec2::splat(1.0));
 
-    // --- Aim: right-side touch (not on a button) overrides the mouse cursor ---
+    // "Free" touches are those not on the left stick and not on a button.
+    let is_free = |start: Vec2| {
+        !(start.x < w * 0.42 && start.y > h * 0.30) && !on_button(start)
+    };
+    let free: Vec<_> = touches.iter().filter(|t| is_free(t.start_position())).collect();
+
+    // --- Pinch to zoom (two free fingers) or single-finger aim ---
     let mut aim_touch = None;
-    for t in touches.iter() {
-        let start = t.start_position();
-        if start.x > w * 0.5 && !on_button(start) {
+    if free.len() >= 2 {
+        let dist = free[0].position().distance(free[1].position());
+        if let Some(prev) = state.last_pinch {
+            state.pinch_accum += dist - prev;
+        }
+        state.last_pinch = Some(dist);
+        // Each ~45px of spread is one zoom level (spread = zoom in).
+        while state.pinch_accum > 45.0 {
+            game.zoom += 1.0;
+            state.pinch_accum -= 45.0;
+        }
+        while state.pinch_accum < -45.0 {
+            game.zoom -= 1.0;
+            state.pinch_accum += 45.0;
+        }
+    } else {
+        state.last_pinch = None;
+        state.pinch_accum = 0.0;
+        if let Some(t) = free.first() {
             aim_touch = Some(t.position());
-            break;
         }
     }
     game.aim = aim_touch.or(cursor);
+
+    // --- Double-tap on the battlefield designates the main-gun target ---
+    let mut touch_designate = None;
+    for t in touches.iter_just_released() {
+        let start = t.start_position();
+        if !is_free(start) || t.position().distance(start) > DRAG_THRESHOLD {
+            continue;
+        }
+        let now = time.elapsed_secs();
+        if let Some(prev) = state.last_tap_pos {
+            if now - state.last_tap_time < 0.4 && t.position().distance(prev) < 60.0 {
+                touch_designate = Some(t.position());
+                state.last_tap_pos = None;
+                continue;
+            }
+        }
+        state.last_tap_pos = Some(t.position());
+        state.last_tap_time = now;
+    }
 
     // --- Fire ---
     let mut touch_fire_main = false;
@@ -163,6 +209,10 @@ fn gather_input(
         if t.start_position().distance(mg_center) < BTN_R {
             touch_fire_mg = true;
         }
+    }
+    if let Some(pos) = touch_designate {
+        game.aim = Some(pos);
+        touch_fire_main = true;
     }
     game.fire_main = keys.just_pressed(KeyCode::KeyE)
         || mouse_buttons.just_pressed(MouseButton::Left)
