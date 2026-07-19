@@ -117,10 +117,11 @@ fn spawn_hud(mut commands: Commands) {
         .with_children(|p| {
             for line in [
                 "TRAINING — DRIVE & FIGHT",
-                "Keyboard: W A S D / arrows drive • mouse aims turret",
-                "Main gun: E / left-click    MG: Q / right-click",
-                "Touch: left stick drives • drag right side to aim",
-                "         FIRE = main gun • MG button = machine gun",
+                "Drive: W A S D / arrows • Aim: mouse (turret traverses to it)",
+                "Main gun: E / left-click — requests a shot; the gun lays on",
+                "   target and fires once aligned and loaded",
+                "Machine gun: Q / right-click",
+                "Touch: left stick drives • drag right to aim • FIRE / MG",
                 "Camera: middle-drag orbit • R F pitch • wheel zoom",
             ] {
                 p.spawn((
