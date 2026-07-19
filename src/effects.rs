@@ -380,6 +380,71 @@ pub fn spawn_gun_smoke(
     }
 }
 
+/// A long-lived rising smoke column pinned to a point (destroyed tanks).
+pub fn spawn_smoke_column(commands: &mut Commands, at: Vec3, duration: f32, scale: f32) {
+    commands.spawn((
+        Transform::from_translation(at),
+        Smoker {
+            timer: Timer::from_seconds(0.3, TimerMode::Repeating),
+            remaining: duration,
+            scale,
+            despawn_when_done: true,
+        },
+    ));
+}
+
+/// One tick of a burning/smoldering wreck: a dark smoke puff, plus a flame lick
+/// if it is still actively on fire.
+pub fn spawn_wreck_fire(
+    commands: &mut Commands,
+    fx: &EffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    pos: Vec3,
+    burning: bool,
+    seed: u32,
+) {
+    let mut rng = Rng::new(seed | 1);
+    let g = rng.range(0.08, 0.16);
+    spawn_particle(
+        commands,
+        fx.puff_mesh.clone(),
+        materials,
+        pos + Vec3::new(rng.range(-0.5, 0.5), rng.range(0.2, 0.8), rng.range(-0.5, 0.5)),
+        ParticleSpec {
+            tint: Color::srgba(g, g, g + 0.02, 0.55),
+            emissive: LinearRgba::BLACK,
+            vel: Vec3::new(rng.range(-0.5, 0.5), 0.0, rng.range(-0.5, 0.5)),
+            rise: rng.range(2.0, 3.4),
+            ttl: rng.range(1.8, 3.0),
+            expand: 2.6,
+            start_scale: rng.range(0.7, 1.2),
+            spin_rate: rng.range(-1.2, 1.2),
+            start_alpha: 0.5,
+        },
+        &mut rng,
+    );
+    if burning {
+        spawn_particle(
+            commands,
+            fx.puff_mesh.clone(),
+            materials,
+            pos + Vec3::new(rng.range(-0.4, 0.4), rng.range(0.0, 0.4), rng.range(-0.4, 0.4)),
+            ParticleSpec {
+                tint: Color::srgba(1.0, rng.range(0.45, 0.7), 0.12, 0.9),
+                emissive: LinearRgba::rgb(2.6, 0.9, 0.2),
+                vel: Vec3::new(rng.range(-0.4, 0.4), rng.range(1.0, 2.2), rng.range(-0.4, 0.4)),
+                rise: 1.2,
+                ttl: rng.range(0.35, 0.6),
+                expand: 1.2,
+                start_scale: rng.range(0.5, 0.9),
+                spin_rate: rng.range(-3.0, 3.0),
+                start_alpha: 0.95,
+            },
+            &mut rng,
+        );
+    }
+}
+
 /// A muzzle flash: a big star plus (for the main gun) fire wisps.
 pub fn spawn_muzzle_flash(
     commands: &mut Commands,

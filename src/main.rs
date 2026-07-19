@@ -10,6 +10,7 @@
 //! - [`ui`]       loading screen (with version) and in-game HUD
 
 mod camera;
+mod combat;
 mod control;
 mod effects;
 mod input;
@@ -70,6 +71,7 @@ fn main() {
             physics::PhysicsPlugin,
             control::ControlPlugin,
             weapons::WeaponsPlugin,
+            combat::CombatPlugin,
             effects::EffectsPlugin,
             ui::UiPlugin,
         ))

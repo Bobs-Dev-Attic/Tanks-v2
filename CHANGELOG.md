@@ -3,6 +3,25 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.0] - 2026-07-19
+
+### Added
+- **Damage system**: tanks now have armor/health. Shell hits subtract HP, flash
+  the hull, and progressively **char the armor**. A tank's **abilities fade with
+  its condition** — a battered crew traverses the turret, reloads, and drives
+  slower. A destroyed tank is knocked out: its **turret slews askew**, it brews
+  up, and it keeps **smoldering and smoking** as persistent wreckage.
+- **Tank collisions**: enemy tanks are solid now. Driving into a parked panzer
+  stops you instead of clipping through it (parked enemies are immovable).
+
+### Changed
+- **Enemy tanks now resemble German WWII battle tanks** (Tiger/Panzer look): a
+  boxy slab turret, a long overhanging gun, a commander's cupola, a vertical bow
+  plate, and Schürzen side skirts, in dark Panzergrau.
+- **Target indicator** is now a **reverse shockwave**: a translucent bubble that
+  collapses inward toward the aim point (instead of a flat ring), then releases
+  and fades when the shell is away.
+
 ## [0.6.2] - 2026-07-19
 
 ### Added

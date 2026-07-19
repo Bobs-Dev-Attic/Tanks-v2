@@ -3,6 +3,7 @@
 //! and return rollers all spin at speeds set by their radius, while cleated
 //! track links march around the bottom run and the track band scrolls.
 
+use crate::combat::{Armor, TankRig};
 use crate::control::PlayerControlled;
 use crate::effects::{spawn_dust, spawn_track_mark, EffectAssets, Wreckage};
 use crate::physics::Vehicle;
@@ -115,17 +116,30 @@ fn spawn_tank(
     yaw: f32,
     team: Team,
 ) {
+    // German WWII tanks (Tiger/Panzer look) get a boxier, bigger turret, a long
+    // overhanging gun, a commander's cupola, and side skirts (Schürzen).
+    let german = team == Team::Enemy;
+
     // --- Meshes ---
     let hull_mesh = meshes.add(gradient_box(2.8, 1.0, 4.8, 1.15, 0.6));
     let glacis_mesh = meshes.add(gradient_box(2.7, 0.95, 0.16, 1.2, 0.7));
     let deck_mesh = meshes.add(gradient_box(2.5, 0.18, 2.0, 1.05, 0.75));
     let fender_mesh = meshes.add(Cuboid::new(0.95, 0.1, 5.2));
-    let turret_mesh = meshes.add(gradient_box(2.0, 0.8, 2.2, 1.15, 0.65));
+    // Big slab turret for the German tanks, rounder for the player.
+    let turret_mesh = if german {
+        meshes.add(gradient_box(2.5, 0.95, 2.7, 1.15, 0.6))
+    } else {
+        meshes.add(gradient_box(2.0, 0.8, 2.2, 1.15, 0.65))
+    };
     let bustle_mesh = meshes.add(gradient_box(1.5, 0.55, 0.7, 1.05, 0.75));
     let mantlet_mesh = meshes.add(gradient_box(1.2, 0.75, 0.5, 1.1, 0.7));
-    let barrel_mesh = meshes.add(Cylinder::new(0.12, 2.8));
+    let barrel_len = if german { 3.8 } else { 2.8 };
+    let barrel_mesh = meshes.add(Cylinder::new(if german { 0.13 } else { 0.12 }, barrel_len));
     let brake_mesh = meshes.add(Cuboid::new(0.34, 0.34, 0.5));
     let hatch_mesh = meshes.add(Cylinder::new(0.3, 0.14));
+    let cupola_mesh = meshes.add(Cylinder::new(0.42, 0.36));
+    let skirt_mesh = meshes.add(Cuboid::new(0.08, 0.5, 4.6));
+    let bowplate_mesh = meshes.add(gradient_box(2.7, 1.0, 0.16, 1.2, 0.7));
     let antenna_mesh = meshes.add(Cylinder::new(0.03, 2.2));
     let exhaust_mesh = meshes.add(Cylinder::new(0.11, 0.9));
     let headlight_mesh = meshes.add(Cuboid::new(0.22, 0.22, 0.12));
@@ -188,10 +202,16 @@ fn spawn_tank(
     vehicle.yaw = yaw;
     // Enemies keep a normal max_speed (a zero would divide-by-zero in the
     // physics' speed factor and NaN out their position). Nothing writes their
-    // throttle, so they stay parked as static targets.
+    // throttle, so they stay parked — and they're immovable, so driving into one
+    // stops the player rather than shoving it aside.
+    if german {
+        vehicle.radius = 3.0;
+        vehicle.movable = false;
+    }
 
     let mut wheels: Vec<(Entity, f32)> = Vec::new();
     let mut links: Vec<(Entity, f32)> = Vec::new();
+    let mut turret_ent: Option<Entity> = None;
 
     let root = commands
         .spawn((
@@ -231,19 +251,37 @@ fn spawn_tank(
                 Transform::from_xyz(s * TRACK_X, 1.05, 0.0),
             ));
         }
-        // Headlights (front) and exhausts (rear).
+        // Exhausts (rear) on both; headlights only on the player (German tanks
+        // instead get a flat vertical bow plate and side skirts below).
         for s in [-1.0f32, 1.0] {
-            p.spawn((
-                Mesh3d(headlight_mesh.clone()),
-                MeshMaterial3d(light_mat.clone()),
-                Transform::from_xyz(s * 0.95, 1.02, -2.45),
-            ));
+            if !german {
+                p.spawn((
+                    Mesh3d(headlight_mesh.clone()),
+                    MeshMaterial3d(light_mat.clone()),
+                    Transform::from_xyz(s * 0.95, 1.02, -2.45),
+                ));
+            }
             p.spawn((
                 Mesh3d(exhaust_mesh.clone()),
                 MeshMaterial3d(metal_mat.clone()),
                 Transform::from_xyz(s * 1.0, 1.1, 2.5)
                     .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
             ));
+        }
+        // German cues: a near-vertical bow plate and Schürzen side skirts.
+        if german {
+            p.spawn((
+                Mesh3d(bowplate_mesh.clone()),
+                MeshMaterial3d(hull_mat.clone()),
+                Transform::from_xyz(0.0, 1.0, -2.45).with_rotation(Quat::from_rotation_x(0.18)),
+            ));
+            for s in [-1.0f32, 1.0] {
+                p.spawn((
+                    Mesh3d(skirt_mesh.clone()),
+                    MeshMaterial3d(accent_mat.clone()),
+                    Transform::from_xyz(s * (TRACK_X + 0.18), 0.95, 0.0),
+                ));
+            }
         }
         // Hull machine gun at the front (co-driver's position). The marker is
         // an unrotated point so its -Z is hull-forward; a short barrel is visual.
@@ -262,15 +300,20 @@ fn spawn_tank(
         ));
 
         // --- Turret assembly (yaw) with nested gun mount (pitch) ---
+        // German turret sits a touch forward; the gun overhangs the bow.
+        let turret_z = if german { 0.0 } else { 0.2 };
+        let barrel_z = -(barrel_len / 2.0 + 0.1);
+        let brake_z = barrel_z - barrel_len / 2.0 + 0.05;
         let mut turret_ec = p.spawn((Transform::default(), Visibility::default()));
         if is_player {
             turret_ec.insert(Turret::new(0.9));
         }
+        turret_ent = Some(turret_ec.id());
         turret_ec.with_children(|t| {
                 t.spawn((
                     Mesh3d(turret_mesh.clone()),
                     MeshMaterial3d(hull_mat.clone()),
-                    Transform::from_xyz(0.0, 1.55, 0.2),
+                    Transform::from_xyz(0.0, 1.55, turret_z),
                 ));
                 // Rear stowage bustle.
                 t.spawn((
@@ -289,6 +332,14 @@ fn spawn_tank(
                     MeshMaterial3d(dark_mat.clone()),
                     Transform::from_xyz(0.8, 3.0, 0.6),
                 ));
+                // German commander's cupola: a drum on the turret roof rear.
+                if german {
+                    t.spawn((
+                        Mesh3d(cupola_mesh.clone()),
+                        MeshMaterial3d(hull_mat.clone()),
+                        Transform::from_xyz(-0.55, 2.05, 0.7),
+                    ));
+                }
                 // Gun mount at the trunnion (functional only for the player).
                 let mut gun_ec = t.spawn((Transform::from_xyz(0.0, 1.5, -0.9), Visibility::default()));
                 if is_player {
@@ -303,17 +354,17 @@ fn spawn_tank(
                     g.spawn((
                         Mesh3d(barrel_mesh.clone()),
                         MeshMaterial3d(metal_mat.clone()),
-                        Transform::from_xyz(0.0, 0.0, -1.5)
+                        Transform::from_xyz(0.0, 0.0, barrel_z)
                             .with_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
                     ));
                     // Muzzle brake at the tip.
                     g.spawn((
                         Mesh3d(brake_mesh.clone()),
                         MeshMaterial3d(metal_mat.clone()),
-                        Transform::from_xyz(0.0, 0.0, -2.85),
+                        Transform::from_xyz(0.0, 0.0, brake_z),
                     ));
                     if is_player {
-                        g.spawn((Transform::from_xyz(0.0, 0.0, -3.1), Muzzle));
+                        g.spawn((Transform::from_xyz(0.0, 0.0, brake_z - 0.25), Muzzle));
                     }
                 });
             });
@@ -369,6 +420,18 @@ fn spawn_tank(
         last_dust: 0.0,
         last_mark: 0.0,
     });
+
+    // Health and damageable-visual rig for all tanks. German tanks are tougher
+    // (thick armor) but they're the ones taking fire.
+    commands.entity(root).insert((
+        Armor::new(if german { 150.0 } else { 200.0 }),
+        TankRig {
+            hull_mat: hull_mat.clone(),
+            base_color: body_color,
+            turret: turret_ent,
+            hull_top: 1.7,
+        },
+    ));
 
     if team == Team::Player {
         commands

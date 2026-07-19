@@ -8,13 +8,16 @@
 //! reloads more slowly.
 
 use crate::camera::IsoCamera;
+use crate::combat::Armor;
 use crate::control::PlayerControlled;
 use crate::effects::{
     spawn_explosion, spawn_gun_smoke, spawn_impact_puff, spawn_muzzle_flash, EffectAssets, Wreckage,
 };
 use crate::input::GameInput;
+use crate::tank::Tank;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
+use bevy::render::render_resource::Face;
 use bevy::transform::TransformSystem;
 use std::f32::consts::{FRAC_PI_4, PI, TAU};
 use std::time::Duration;
@@ -23,6 +26,10 @@ use std::time::Duration;
 const SHELL_SPEED: f32 = 90.0;
 /// Gravity applied to shells (must match the ballistic solver).
 const SHELL_GRAVITY: f32 = 30.0;
+/// Main-gun HE damage at the point of impact, and the blast radius over which
+/// that damage tapers to zero.
+const SHELL_DAMAGE: f32 = 70.0;
+const SHELL_SPLASH: f32 = 5.0;
 /// Machine-gun tracer speed and its limited effective range (world units).
 const MG_SPEED: f32 = 130.0;
 const MG_RANGE: f32 = 55.0;
@@ -150,7 +157,8 @@ pub struct Weapons {
     /// The on-ground marker entity shown while a shot is pending.
     marker: Option<Entity>,
     /// Crew/vehicle condition in 0..1; scales traverse, elevation, and reload.
-    condition: f32,
+    /// Written by the combat system as the tank takes damage.
+    pub condition: f32,
 }
 
 impl Default for Weapons {
@@ -225,9 +233,10 @@ fn setup_weapon_assets(
         unlit: true,
         ..default()
     });
-    // Target marker: a flat ring that pulses toward the center of the target.
-    // Each spawned marker gets its own material instance (see operate_main_gun).
-    let marker_mesh = meshes.add(Torus::new(0.72, 0.95));
+    // Target marker: a translucent bubble that collapses inward toward the aim
+    // point — a shockwave run in reverse. Each marker gets its own material
+    // instance (see operate_main_gun) so it can fade independently.
+    let marker_mesh = meshes.add(Sphere::new(1.0));
     commands.insert_resource(WeaponAssets {
         shell_mesh,
         shell_mat,
@@ -293,12 +302,16 @@ fn operate_main_gun(
                 .as_ref()
                 .map(|t| solve_elevation(t, launch, tp, SHELL_SPEED, SHELL_GRAVITY, gun.min, gun.max))
                 .unwrap_or(0.0);
-            let base_y = tp.y + 0.1;
+            let base_y = tp.y + 0.05;
             let marker_mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(1.0, 0.25, 0.2, 0.85),
-                emissive: LinearRgba::rgb(2.0, 0.25, 0.2),
+                base_color: Color::srgba(0.55, 0.9, 1.0, 0.55),
+                emissive: LinearRgba::rgb(0.8, 2.2, 3.4),
                 unlit: true,
                 alpha_mode: AlphaMode::Blend,
+                // Cull front faces so the far inside of the sphere shows through
+                // — it reads as a hollow shockwave bubble, not a solid ball.
+                cull_mode: Some(Face::Front),
+                double_sided: true,
                 ..default()
             });
             let marker = commands
@@ -446,6 +459,7 @@ fn update_projectiles(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut shells: Query<(Entity, &mut Shell, &mut Transform), Without<Tracer>>,
     mut tracers: Query<(Entity, &mut Tracer, &mut Transform), Without<Shell>>,
+    mut targets: Query<(&GlobalTransform, &mut Armor), (With<Tank>, Without<PlayerControlled>)>,
 ) {
     let Some(terrain) = terrain else {
         return;
@@ -457,11 +471,36 @@ fn update_projectiles(
     for (entity, mut shell, mut tf) in &mut shells {
         shell.vel.y -= SHELL_GRAVITY * dt;
         tf.translation += shell.vel * dt;
+
+        // A direct hit on an enemy tank's hull detonates the shell on contact.
+        let mut tank_hit = None;
+        for (etf, _) in targets.iter() {
+            let c = etf.translation();
+            let flat = (tf.translation.x - c.x).hypot(tf.translation.z - c.z);
+            let dy = tf.translation.y - c.y;
+            if flat < 3.0 && dy > -0.8 && dy < 3.6 {
+                tank_hit = Some(tf.translation);
+                break;
+            }
+        }
+
         let ground = terrain.height_at(tf.translation.x, tf.translation.z);
         let out = tf.translation.x.abs() > limit || tf.translation.z.abs() > limit;
-        if tf.translation.y <= ground + 0.1 || out {
+        let hit_ground = tf.translation.y <= ground + 0.1;
+        if tank_hit.is_some() || hit_ground || out {
+            let at = tank_hit.unwrap_or(Vec3::new(tf.translation.x, ground, tf.translation.z));
+            // High-explosive splash: full damage at the impact, tapering to zero
+            // at the blast radius, so near-misses still hurt nearby tanks.
+            for (etf, mut armor) in targets.iter_mut() {
+                if armor.destroyed {
+                    continue;
+                }
+                let d = etf.translation().distance(at);
+                if d < SHELL_SPLASH {
+                    armor.damage(SHELL_DAMAGE * (1.0 - d / SHELL_SPLASH));
+                }
+            }
             if let Some(fx) = effects.as_ref() {
-                let at = Vec3::new(tf.translation.x, ground, tf.translation.z);
                 spawn_explosion(
                     &mut commands,
                     fx,
@@ -583,12 +622,12 @@ fn pulse_marker(
             continue;
         }
         let t = (marker.age % period) / period;
-        // Contract from wide to the center, fading as it converges.
-        tf.scale = Vec3::splat(1.75 * (1.0 - t) + 0.12);
-        // Vertical pulse: the ring bobs up and settles in step with the pulse.
-        tf.translation.y = marker.base_y + 0.55 * (marker.age * TAU / period).sin().abs();
+        // A shockwave bubble in reverse: collapse from wide down toward the
+        // center of the target, over and over, brightening as it converges.
+        tf.scale = Vec3::splat(2.8 * (1.0 - t) + 0.16);
+        tf.translation.y = marker.base_y;
         if let Some(mat) = materials.get_mut(&marker.mat) {
-            mat.base_color = mat.base_color.with_alpha(0.85 * (1.0 - t) + 0.1);
+            mat.base_color = mat.base_color.with_alpha(0.28 + 0.42 * (1.0 - t));
         }
     }
 }

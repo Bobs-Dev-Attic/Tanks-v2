@@ -13,7 +13,7 @@ pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, integrate_vehicles);
+        app.add_systems(Update, (integrate_vehicles, resolve_collisions).chain());
     }
 }
 
@@ -40,6 +40,10 @@ pub struct Vehicle {
     /// Half the track length / width used for the suspension footprint.
     pub half_length: f32,
     pub half_width: f32,
+    /// Collision radius for tank-vs-tank push-apart.
+    pub radius: f32,
+    /// Whether collisions can shove this tank (parked enemies are immovable).
+    pub movable: bool,
 }
 
 impl Default for Vehicle {
@@ -55,6 +59,8 @@ impl Default for Vehicle {
             turn_rate: 1.5,
             half_length: 2.6,
             half_width: 1.6,
+            radius: 2.6,
+            movable: true,
         }
     }
 }
@@ -119,6 +125,42 @@ fn integrate_vehicles(
             .rotation;
         let blend = (dt * 8.0).min(1.0);
         transform.rotation = transform.rotation.slerp(target_rot, blend);
+    }
+}
+
+/// Push overlapping tanks apart so they collide instead of interpenetrating.
+/// Immovable tanks (parked enemies) hold their ground; a movable tank driving
+/// into one is deflected the full overlap.
+fn resolve_collisions(mut vehicles: Query<(&mut Transform, &Vehicle)>) {
+    let mut items: Vec<(Vec3, f32, bool)> = vehicles
+        .iter()
+        .map(|(t, v)| (t.translation, v.radius, v.movable))
+        .collect();
+    let n = items.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let mut d = items[i].0 - items[j].0;
+            d.y = 0.0;
+            let dist = d.length();
+            let min = items[i].1 + items[j].1;
+            if dist >= min || dist <= 1e-4 {
+                continue;
+            }
+            let push = d / dist * (min - dist);
+            let (mi, mj) = (items[i].2, items[j].2);
+            let (wi, wj) = match (mi, mj) {
+                (true, true) => (0.5, 0.5),
+                (true, false) => (1.0, 0.0),
+                (false, true) => (0.0, 1.0),
+                (false, false) => (0.0, 0.0),
+            };
+            items[i].0 += push * wi;
+            items[j].0 -= push * wj;
+        }
+    }
+    for ((mut tf, _), (pos, _, _)) in vehicles.iter_mut().zip(items) {
+        tf.translation.x = pos.x;
+        tf.translation.z = pos.z;
     }
 }
 
