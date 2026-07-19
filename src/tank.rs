@@ -4,6 +4,7 @@
 //! track links march around the bottom run and the track band scrolls.
 
 use crate::control::PlayerControlled;
+use crate::effects::{spawn_dust, spawn_track_mark, EffectAssets, Wreckage};
 use crate::physics::Vehicle;
 use crate::terrain::Terrain;
 use crate::weapons::{GunMount, HullMg, Muzzle, Shake, Turret, Weapons};
@@ -24,7 +25,7 @@ pub struct TankPlugin;
 impl Plugin for TankPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_training_mission)
-            .add_systems(Update, animate_tracks);
+            .add_systems(Update, (animate_tracks, emit_track_effects));
     }
 }
 
@@ -49,6 +50,10 @@ pub struct TankVisual {
     links: Vec<(Entity, f32)>,
     /// Distance the tracks have travelled, for wheel spin and link marching.
     distance: f32,
+    /// Absolute ground travelled, for spacing dust and track marks.
+    traveled: f32,
+    last_dust: f32,
+    last_mark: f32,
 }
 
 fn spawn_training_mission(
@@ -325,6 +330,9 @@ fn spawn_tank(
         wheels,
         links,
         distance: 0.0,
+        traveled: 0.0,
+        last_dust: 0.0,
+        last_mark: 0.0,
     });
 
     if team == Team::Player {
@@ -379,6 +387,77 @@ fn animate_tracks(
             if let Ok(mut tf) = transforms.get_mut(link) {
                 tf.translation.z = (base - distance).rem_euclid(TRACK_RUN) - TRACK_RUN * 0.5;
             }
+        }
+    }
+}
+
+/// Kick up ground-tinted dust and leave track marks as the tank drives.
+#[allow(clippy::too_many_arguments)]
+fn emit_track_effects(
+    time: Res<Time>,
+    mut commands: Commands,
+    terrain: Option<Res<Terrain>>,
+    fx: Option<Res<EffectAssets>>,
+    mut wreckage: ResMut<Wreckage>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut tanks: Query<(&Vehicle, &Transform, &mut TankVisual)>,
+) {
+    let (Some(terrain), Some(fx)) = (terrain, fx) else {
+        return;
+    };
+    let dt = time.delta_secs();
+    for (vehicle, tf, mut visual) in &mut tanks {
+        let speed = vehicle.forward_speed.abs();
+        if speed < 0.6 {
+            continue;
+        }
+        visual.traveled += speed * dt;
+        let do_dust = visual.traveled - visual.last_dust > 0.5;
+        let do_mark = visual.traveled - visual.last_mark > 0.7;
+        if !do_dust && !do_mark {
+            continue;
+        }
+        let seed = (visual.traveled * 350.0) as u32 | 1;
+        for (i, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+            // Behind the tank (its front is -Z, so the rear is +Z).
+            let rear = tf.translation + tf.rotation * Vec3::new(side * TRACK_X, 0.0, 2.3);
+            let g = terrain.height_at(rear.x, rear.z);
+            let ground = terrain.ground_color(rear.x, rear.z);
+            if do_dust {
+                let tint = Color::srgba(
+                    (ground.x * 1.25 + 0.12).min(1.0),
+                    (ground.y * 1.25 + 0.12).min(1.0),
+                    (ground.z * 1.25 + 0.12).min(1.0),
+                    1.0,
+                );
+                let scale = 0.45 + speed * 0.03;
+                spawn_dust(
+                    &mut commands,
+                    &fx,
+                    &mut materials,
+                    Vec3::new(rear.x, g + 0.1, rear.z),
+                    tint,
+                    scale,
+                    seed.wrapping_add(i as u32 * 7919),
+                );
+            }
+            if do_mark {
+                let dark = Color::srgba(ground.x * 0.42, ground.y * 0.42, ground.z * 0.42, 0.55);
+                spawn_track_mark(
+                    &mut commands,
+                    &fx,
+                    &mut materials,
+                    &mut wreckage,
+                    Vec3::new(rear.x, g, rear.z),
+                    dark,
+                );
+            }
+        }
+        if do_dust {
+            visual.last_dust = visual.traveled;
+        }
+        if do_mark {
+            visual.last_mark = visual.traveled;
         }
     }
 }

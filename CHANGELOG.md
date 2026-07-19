@@ -3,6 +3,25 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.6.0] - 2026-07-19
+
+### Changed
+- **The turret no longer follows the mouse.** You *designate* a target by
+  clicking (or `E`); the turret then traverses to it, lays the gun, and fires
+  when ready. It holds its position otherwise.
+- **Better fire solution over terrain**: the firing elevation is now found by
+  simulating the shell's trajectory against the actual heightfield and picking
+  the angle whose impact lands closest to the target (clears or clips hills
+  correctly) instead of a flat-ground formula.
+- **Target indicator** is now a ring that **pulses inward toward the center** of
+  the target while the gun lays.
+
+### Added
+- **Track dust**: driving kicks up dust behind the tracks, tinted by the ground
+  material (grass / dirt / rock / snow) and scaled by speed.
+- **Track marks**: the tank leaves persistent tracks on the ground as it drives
+  (recycled with the wreckage budget).
+
 ## [0.5.1] - 2026-07-19
 
 ### Changed
