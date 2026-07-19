@@ -22,8 +22,10 @@ use bevy::transform::TransformSystem;
 use std::f32::consts::{FRAC_PI_4, PI, TAU};
 use std::time::Duration;
 
-/// Muzzle velocity of a main-gun shell (world units / second).
-const SHELL_SPEED: f32 = 90.0;
+/// Muzzle velocity of a main-gun shell (world units / second). Ballistic range
+/// scales with the square of this, so raising it by √3 (≈90→156) roughly triples
+/// the gun's reach (max flat-ground range ≈ SPEED²/GRAVITY, ~270 → ~810 units).
+const SHELL_SPEED: f32 = 156.0;
 /// Gravity applied to shells (must match the ballistic solver).
 const SHELL_GRAVITY: f32 = 30.0;
 /// Main-gun HE damage at the point of impact, and the blast radius over which

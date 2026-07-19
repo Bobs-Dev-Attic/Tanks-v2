@@ -3,6 +3,14 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.5] - 2026-07-19
+
+### Changed
+- **Tripled the main gun's range.** The shell's muzzle velocity was raised so its
+  ballistic reach is roughly three times as far (max flat-ground range ~270 →
+  ~810 world units), letting you engage targets clear across the battlefield. The
+  ballistic solver uses the same value, so aiming stays accurate.
+
 ## [0.7.4] - 2026-07-19
 
 ### Changed
