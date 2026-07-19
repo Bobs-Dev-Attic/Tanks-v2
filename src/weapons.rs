@@ -407,6 +407,27 @@ fn operate_main_gun(
         turret_tf.rotation = Quat::from_rotation_y(turret.yaw);
         turret.aligned = wrap_pi(desired_yaw - turret.yaw).abs() < YAW_TOL;
 
+        // Once the turret is on target, re-solve the firing elevation from the
+        // CURRENT muzzle position. The turret has been traversing since the shot
+        // was requested, so the launch point (and its height over the terrain) has
+        // moved; solving from the live, aligned muzzle means the gun lays on a
+        // solution that matches the geometry at the moment it actually fires — the
+        // key to hitting targets across uneven ground. (Gating on `aligned` keeps
+        // the per-frame solver cost off the whole traverse.)
+        if turret.aligned {
+            if let (Ok(muzzle), Some(t)) = (muzzles.get_single(), terrain.as_ref()) {
+                weapon.fire_elev = solve_elevation(
+                    t,
+                    muzzle.translation(),
+                    tp,
+                    SHELL_SPEED,
+                    SHELL_GRAVITY,
+                    gun.min,
+                    gun.max,
+                );
+            }
+        }
+
         let desired_elev = weapon.fire_elev;
         gun.elev = step_toward(gun.elev, desired_elev, gun.rate * cond * dt);
         gun_tf.rotation = Quat::from_rotation_x(gun.elev);
@@ -605,7 +626,8 @@ fn update_projectiles(
 
 /// Find the gun elevation whose simulated shell lands closest to `target`,
 /// sampling the trajectory against the actual terrain so shots clear (or clip)
-/// hills correctly. Picks the best of a spread of candidate angles.
+/// hills correctly. A coarse sweep finds the best candidate angle, then a couple
+/// of refinement passes narrow in around it for a precise firing solution.
 fn solve_elevation(
     terrain: &Terrain,
     launch: Vec3,
@@ -620,23 +642,50 @@ fn solve_elevation(
     if azimuth == Vec3::ZERO {
         return 0.0;
     }
-    let steps = 30;
+
+    // Error of a candidate elevation: how far its simulated impact lands from the
+    // target (measured in the ground plane, so a shot that lands at the right
+    // spot but on a slope still scores as a hit).
+    let err_at = |theta: f32| {
+        let impact = simulate_impact(terrain, launch, azimuth, speed, gravity, theta);
+        Vec2::new(impact.x - target.x, impact.z - target.z).length()
+    };
+
+    // Coarse sweep across the whole elevation band.
+    let steps = 48;
     let mut best = min_elev;
     let mut best_err = f32::MAX;
     for i in 0..=steps {
         let theta = min_elev + (max_elev - min_elev) * (i as f32 / steps as f32);
-        let impact = simulate_impact(terrain, launch, azimuth, speed, gravity, theta);
-        let err = impact.distance(target);
+        let err = err_at(theta);
         if err < best_err {
             best_err = err;
             best = theta;
         }
     }
+
+    // Refine: repeatedly shrink a window around the current best and re-sample.
+    let mut half = (max_elev - min_elev) / steps as f32;
+    for _ in 0..4 {
+        let lo = (best - half).max(min_elev);
+        let hi = (best + half).min(max_elev);
+        let sub = 8;
+        for i in 0..=sub {
+            let theta = lo + (hi - lo) * (i as f32 / sub as f32);
+            let err = err_at(theta);
+            if err < best_err {
+                best_err = err;
+                best = theta;
+            }
+        }
+        half *= 0.35;
+    }
     best
 }
 
 /// Integrate a shell from `launch` at elevation `theta` (along `azimuth`) until
-/// it meets the terrain, returning the impact point.
+/// it meets the terrain, returning the impact point. Uses a small step and
+/// interpolates the exact crossing so the impact is precise across slopes.
 fn simulate_impact(
     terrain: &Terrain,
     launch: Vec3,
@@ -648,13 +697,19 @@ fn simulate_impact(
     let horizontal = azimuth * (speed * theta.cos());
     let mut vel = Vec3::new(horizontal.x, speed * theta.sin(), horizontal.z);
     let mut pos = launch;
-    let dt = 0.03;
-    for _ in 0..500 {
+    let dt = 0.015;
+    for _ in 0..1400 {
+        let prev = pos;
         vel.y -= gravity * dt;
         pos += vel * dt;
-        let ground = terrain.height_at(pos.x, pos.z);
-        if pos.y <= ground {
-            return Vec3::new(pos.x, ground, pos.z);
+        let prev_gap = prev.y - terrain.height_at(prev.x, prev.z);
+        let gap = pos.y - terrain.height_at(pos.x, pos.z);
+        // Crossed from above the terrain to at/below it — interpolate the hit.
+        if gap <= 0.0 && prev_gap > 0.0 {
+            let s = prev_gap / (prev_gap - gap);
+            let hit = prev.lerp(pos, s.clamp(0.0, 1.0));
+            let g = terrain.height_at(hit.x, hit.z);
+            return Vec3::new(hit.x, g, hit.z);
         }
         if pos.distance(launch) > MAP_SIZE {
             break;

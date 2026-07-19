@@ -3,6 +3,18 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.3] - 2026-07-19
+
+### Fixed
+- **The gun now compensates for terrain far more accurately.** The firing
+  elevation used to be solved once, the instant you designated — before the
+  turret had traversed — so the launch point (and its height over the ground) was
+  wrong and the shell missed over uneven terrain. It's now re-solved from the
+  live muzzle once the turret is on target, so the solution matches the geometry
+  at the moment the shell actually leaves the barrel. The ballistic solver is also
+  sharper: a finer trajectory integration that interpolates the exact terrain
+  impact, plus refinement passes that narrow in on the best angle.
+
 ## [0.7.2] - 2026-07-19
 
 ### Fixed
