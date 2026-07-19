@@ -179,12 +179,14 @@ impl Default for Weapons {
     }
 }
 
-/// The pulsing ring that marks the committed target. It owns its own material
-/// so it can pulse and fade independently of any later marker.
+/// The reverse-shockwave marker on the target: a ground ring plus a low dome.
+/// It owns its own materials so it can pulse and fade independently of any
+/// later marker.
 #[derive(Component)]
 pub struct TargetMarker {
     age: f32,
-    mat: Handle<StandardMaterial>,
+    ring_mat: Handle<StandardMaterial>,
+    dome_mat: Handle<StandardMaterial>,
     base_y: f32,
 }
 
@@ -211,7 +213,10 @@ struct WeaponAssets {
     shell_mat: Handle<StandardMaterial>,
     tracer_mesh: Handle<Mesh>,
     tracer_mat: Handle<StandardMaterial>,
-    marker_mesh: Handle<Mesh>,
+    /// Flat ring that lies on the ground under the aim point.
+    marker_ring_mesh: Handle<Mesh>,
+    /// Low translucent dome above the ring.
+    marker_dome_mesh: Handle<Mesh>,
 }
 
 fn setup_weapon_assets(
@@ -233,16 +238,20 @@ fn setup_weapon_assets(
         unlit: true,
         ..default()
     });
-    // Target marker: a translucent bubble that collapses inward toward the aim
-    // point — a shockwave run in reverse. Each marker gets its own material
-    // instance (see operate_main_gun) so it can fade independently.
-    let marker_mesh = meshes.add(Sphere::new(1.0));
+    // Target marker: a flat ring lying on the ground with a low translucent dome
+    // over it — a shockwave run in reverse, collapsing inward toward the aim
+    // point on the surface. Each marker gets its own materials (see
+    // operate_main_gun) so it can fade independently. A Bevy `Torus` already lies
+    // flat in the XZ plane, so it reads as a ring painted on the ground.
+    let marker_ring_mesh = meshes.add(Torus::new(0.82, 1.0));
+    let marker_dome_mesh = meshes.add(Sphere::new(1.0));
     commands.insert_resource(WeaponAssets {
         shell_mesh,
         shell_mat,
         tracer_mesh,
         tracer_mat,
-        marker_mesh,
+        marker_ring_mesh,
+        marker_dome_mesh,
     });
 }
 
@@ -258,6 +267,7 @@ fn operate_main_gun(
     effects: Option<Res<EffectAssets>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     muzzles: Query<&GlobalTransform, With<Muzzle>>,
+    enemies: Query<&GlobalTransform, (With<Tank>, Without<PlayerControlled>)>,
     mut roots: Query<(&GlobalTransform, &mut Weapons, &mut Shake), With<PlayerControlled>>,
     mut turrets: Query<(&mut Transform, &mut Turret), Without<GunMount>>,
     mut guns: Query<(&mut Transform, &mut GunMount), Without<Turret>>,
@@ -279,11 +289,39 @@ fn operate_main_gun(
     // Reload progresses slower when the tank is in poor condition.
     weapon.main.tick(Duration::from_secs_f32(dt * cond));
 
-    let live_target = input
+    // The ground point under the cursor/tap.
+    let ground_target = input
         .aim
         .zip(cameras.get_single().ok())
         .zip(terrain.as_ref())
         .and_then(|((screen, (camera, cam_tf)), t)| cursor_ground(screen, camera, cam_tf, t));
+
+    // If the aim point is near an enemy on screen, snap to that enemy's base so
+    // that clicking / double-tapping close to a tank reliably targets it (rather
+    // than the ground behind it that the ray happens to hit).
+    let snap_target = input
+        .aim
+        .zip(cameras.get_single().ok())
+        .and_then(|(screen, (camera, cam_tf))| {
+            let mut best = 80.0_f32;
+            let mut found = None;
+            for etf in &enemies {
+                let w = etf.translation();
+                if let Ok(sp) = camera.world_to_viewport(cam_tf, w) {
+                    let d = sp.distance(screen);
+                    if d < best {
+                        best = d;
+                        let gy = terrain
+                            .as_ref()
+                            .map(|t| t.height_at(w.x, w.z))
+                            .unwrap_or(w.y);
+                        found = Some(Vec3::new(w.x, gy, w.z));
+                    }
+                }
+            }
+            found
+        });
+    let live_target = snap_target.or(ground_target);
 
     let (_, root_rot, root_pos) = root_gt.to_scale_rotation_translation();
 
@@ -302,29 +340,60 @@ fn operate_main_gun(
                 .as_ref()
                 .map(|t| solve_elevation(t, launch, tp, SHELL_SPEED, SHELL_GRAVITY, gun.min, gun.max))
                 .unwrap_or(0.0);
-            let base_y = tp.y + 0.05;
-            let marker_mat = materials.add(StandardMaterial {
-                base_color: Color::srgba(0.55, 0.9, 1.0, 0.55),
-                emissive: LinearRgba::rgb(0.8, 2.2, 3.4),
+            // Anchor the marker to the ground surface under the target point.
+            let ground_y = terrain
+                .as_ref()
+                .map(|t| t.height_at(tp.x, tp.z))
+                .unwrap_or(tp.y);
+            let base_y = ground_y + 0.04;
+            // Bright ring painted flat on the ground.
+            let ring_mat = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.6, 0.92, 1.0, 0.85),
+                emissive: LinearRgba::rgb(0.6, 2.4, 3.6),
                 unlit: true,
                 alpha_mode: AlphaMode::Blend,
-                // Cull front faces so the far inside of the sphere shows through
-                // — it reads as a hollow shockwave bubble, not a solid ball.
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            });
+            // Low translucent dome over it — the shockwave bubble, sitting on the
+            // surface (its lower half is hidden by the terrain).
+            let dome_mat = materials.add(StandardMaterial {
+                base_color: Color::srgba(0.5, 0.85, 1.0, 0.4),
+                emissive: LinearRgba::rgb(0.5, 1.6, 2.6),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
                 cull_mode: Some(Face::Front),
                 double_sided: true,
                 ..default()
             });
+            let ring_mesh = assets.marker_ring_mesh.clone();
+            let dome_mesh = assets.marker_dome_mesh.clone();
+            let (ring_mat_c, dome_mat_c) = (ring_mat.clone(), dome_mat.clone());
             let marker = commands
                 .spawn((
-                    Mesh3d(assets.marker_mesh.clone()),
-                    MeshMaterial3d(marker_mat.clone()),
                     Transform::from_translation(Vec3::new(tp.x, base_y, tp.z)),
+                    Visibility::default(),
                     TargetMarker {
                         age: 0.0,
-                        mat: marker_mat,
+                        ring_mat: ring_mat_c,
+                        dome_mat: dome_mat_c,
                         base_y,
                     },
                 ))
+                .with_children(|m| {
+                    m.spawn((
+                        Mesh3d(ring_mesh),
+                        MeshMaterial3d(ring_mat),
+                        Transform::from_xyz(0.0, 0.02, 0.0),
+                    ));
+                    // Flatten the dome so it hugs the ground.
+                    m.spawn((
+                        Mesh3d(dome_mesh),
+                        MeshMaterial3d(dome_mat),
+                        Transform::from_scale(Vec3::new(1.0, 0.5, 1.0)),
+                    ));
+                })
                 .id();
             weapon.marker = Some(marker);
         }
@@ -594,9 +663,10 @@ fn simulate_impact(
     pos
 }
 
-/// Animate the target marker: while pending, a ring that pulses inward toward
-/// the center and bobs vertically; once the shot is away, it expands, rises, and
-/// fades out before despawning.
+/// Animate the target marker on the ground: a ring-and-dome shockwave that
+/// collapses inward toward the target point over and over while the gun lays;
+/// once the shot is away it releases outward and fades before despawning. The
+/// marker stays pinned to the ground surface (`base_y`) throughout.
 fn pulse_marker(
     time: Res<Time>,
     mut commands: Commands,
@@ -607,27 +677,32 @@ fn pulse_marker(
     let period = 0.7;
     for (entity, mut tf, mut marker, fading) in &mut markers {
         marker.age += dt;
+        tf.translation.y = marker.base_y;
+        let (ring_a, dome_a);
         if let Some(mut fade) = fading {
-            // After firing: swell and rise while fading to nothing.
+            // After firing: release outward and fade to nothing.
             fade.t += dt;
             let f = (fade.t / 0.5).clamp(0.0, 1.0);
-            tf.scale = Vec3::splat(0.12 + 1.7 * f);
-            tf.translation.y = marker.base_y + 1.4 * f;
-            if let Some(mat) = materials.get_mut(&marker.mat) {
-                mat.base_color = mat.base_color.with_alpha(0.7 * (1.0 - f));
-            }
+            tf.scale = Vec3::splat(0.2 + 2.4 * f);
+            ring_a = 0.85 * (1.0 - f);
+            dome_a = 0.4 * (1.0 - f);
             if fade.t >= 0.5 {
                 commands.entity(entity).despawn_recursive();
+                continue;
             }
-            continue;
+        } else {
+            // A shockwave in reverse: collapse from wide down toward the center of
+            // the target, over and over, brightening as it converges.
+            let t = (marker.age % period) / period;
+            tf.scale = Vec3::splat(2.6 * (1.0 - t) + 0.18);
+            ring_a = 0.85 * (0.35 + 0.5 * (1.0 - t));
+            dome_a = 0.4 * (0.4 + 0.6 * (1.0 - t));
         }
-        let t = (marker.age % period) / period;
-        // A shockwave bubble in reverse: collapse from wide down toward the
-        // center of the target, over and over, brightening as it converges.
-        tf.scale = Vec3::splat(2.8 * (1.0 - t) + 0.16);
-        tf.translation.y = marker.base_y;
-        if let Some(mat) = materials.get_mut(&marker.mat) {
-            mat.base_color = mat.base_color.with_alpha(0.28 + 0.42 * (1.0 - t));
+        if let Some(mat) = materials.get_mut(&marker.ring_mat) {
+            mat.base_color = mat.base_color.with_alpha(ring_a);
+        }
+        if let Some(mat) = materials.get_mut(&marker.dome_mat) {
+            mat.base_color = mat.base_color.with_alpha(dome_a);
         }
     }
 }
