@@ -73,6 +73,9 @@ fn spawn_training_mission(
         .map(|t| t.height_at(center.x, center.y))
         .unwrap_or(0.0);
 
+    // The player faces the enemy line. A tank drives along its heading
+    // `(sin yaw, cos yaw)`, so `yaw = PI` heads toward -Z where the panzers sit —
+    // the player starts pointed at the battle and drives forward into it.
     spawn_tank(
         &mut commands,
         &mut meshes,
@@ -80,12 +83,12 @@ fn spawn_training_mission(
         &mut images,
         center,
         ground + 0.6,
-        0.0,
+        PI,
         Team::Player,
     );
 
-    // A few dark-gray enemy panzers downrange to shoot at. The tank's front is
-    // -Z, so these sit ahead of the player; yaw PI turns them to face back.
+    // A few dark-gray enemy panzers downrange (at -Z), facing back toward the
+    // player at the origin (yaw 0 heads toward +Z).
     for (dx, dz) in [(-20.0, -34.0), (6.0, -44.0), (30.0, -28.0)] {
         let px = center.x + dx;
         let pz = center.y + dz;
@@ -100,7 +103,7 @@ fn spawn_training_mission(
             &mut images,
             Vec2::new(px, pz),
             g + 0.6,
-            PI,
+            0.0,
             Team::Enemy,
         );
     }
