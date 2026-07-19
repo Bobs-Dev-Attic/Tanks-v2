@@ -116,7 +116,7 @@ fn spawn_hud(mut commands: Commands) {
         ))
         .with_children(|p| {
             for line in [
-                "TRAINING — DRIVE & FIGHT",
+                "TRAINING — DRIVE & FIGHT (the panzers shoot back)",
                 "Drive: W A S D / arrows • Aim: mouse (turret traverses to it)",
                 "Main gun: click / E to designate a target — the turret then",
                 "   traverses, lays on it, and fires when ready",

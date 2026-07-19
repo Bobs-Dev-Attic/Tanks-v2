@@ -3,6 +3,17 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.8.3] - 2026-07-19
+
+### Changed
+- On-screen help now notes that the panzers return fire.
+
+### Notes
+- Republish to production: the v0.8.0–v0.8.2 merges built on Vercel but the
+  production alias wasn't promoted (a git-integration hiccup on rapid back-to-back
+  merges), so the live site had lagged behind `main`. This release carries all of
+  that work (enemies shoot back, lighting pass, spawn-facing fix) to production.
+
 ## [0.8.2] - 2026-07-19
 
 ### Fixed
