@@ -3,6 +3,21 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.6.2] - 2026-07-19
+
+### Added
+- **Enemy panzers**: a few dark-gray (Panzergrau) enemy tanks now sit downrange
+  as targets to shoot at. They're static — their turret and gun are visual only.
+- **Gun smoke**: the main gun now puffs out drifting smoke from the muzzle after
+  it fires, on top of the muzzle flash.
+
+### Changed
+- **Target indicator** now also **pulses vertically** (bobbing up in step with
+  its inward pulse) while the gun lays, and instead of vanishing the instant the
+  shell leaves, it **swells, rises, and fades out** after the shot.
+- **Mobile**: the on-screen **FIRE button is gone** — double-tapping the
+  battlefield designates and fires the main gun, so the button was redundant.
+
 ## [0.6.1] - 2026-07-19
 
 ### Added

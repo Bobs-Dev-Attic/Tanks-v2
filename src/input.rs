@@ -23,8 +23,6 @@ const DRAG_THRESHOLD: f32 = 8.0;
 pub const BTN_R: f32 = 60.0;
 /// Distance of a button's centre from the bottom-right corner.
 pub const BTN_MARGIN: f32 = 80.0;
-/// The FIRE button sits this far above the MG button.
-pub const FIRE_OFFSET_Y: f32 = 150.0;
 
 pub struct InputPlugin;
 
@@ -79,11 +77,6 @@ pub fn mg_button_center(w: f32, h: f32) -> Vec2 {
     Vec2::new(w - BTN_MARGIN, h - BTN_MARGIN)
 }
 
-/// Centre of the FIRE button for the given window size.
-pub fn fire_button_center(w: f32, h: f32) -> Vec2 {
-    Vec2::new(w - BTN_MARGIN, h - BTN_MARGIN - FIRE_OFFSET_Y)
-}
-
 fn gather_input(
     mut game: ResMut<GameInput>,
     mut state: ResMut<PointerState>,
@@ -130,8 +123,7 @@ fn gather_input(
         key_axis(KeyCode::KeyS, KeyCode::KeyW) + key_axis(KeyCode::ArrowDown, KeyCode::ArrowUp),
     );
     let mg_center = mg_button_center(w, h);
-    let fire_center = fire_button_center(w, h);
-    let on_button = |p: Vec2| p.distance(mg_center) < BTN_R || p.distance(fire_center) < BTN_R;
+    let on_button = |p: Vec2| p.distance(mg_center) < BTN_R;
 
     for t in touches.iter() {
         let start = t.start_position();
@@ -198,12 +190,9 @@ fn gather_input(
     }
 
     // --- Fire ---
+    // There is no on-screen FIRE button: the main gun is designated (and thus
+    // fired) by a double-tap on the battlefield, handled above.
     let mut touch_fire_main = false;
-    for t in touches.iter_just_pressed() {
-        if t.start_position().distance(fire_center) < BTN_R {
-            touch_fire_main = true;
-        }
-    }
     let mut touch_fire_mg = false;
     for t in touches.iter() {
         if t.start_position().distance(mg_center) < BTN_R {

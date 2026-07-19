@@ -346,6 +346,40 @@ pub fn spawn_track_mark(
     wreckage.add(commands, mark);
 }
 
+/// Lingering gun smoke drifting from the muzzle after the main gun fires.
+pub fn spawn_gun_smoke(
+    commands: &mut Commands,
+    fx: &EffectAssets,
+    materials: &mut Assets<StandardMaterial>,
+    pos: Vec3,
+    dir: Vec3,
+    seed: u32,
+) {
+    let mut rng = Rng::new(seed | 1);
+    for _ in 0..6 {
+        let g = rng.range(0.18, 0.3);
+        spawn_particle(
+            commands,
+            fx.puff_mesh.clone(),
+            materials,
+            pos + dir * rng.range(-0.2, 1.2),
+            ParticleSpec {
+                tint: Color::srgba(g, g, g + 0.02, 0.55),
+                emissive: LinearRgba::BLACK,
+                vel: dir * rng.range(1.5, 4.5)
+                    + Vec3::new(rng.range(-0.6, 0.6), rng.range(0.2, 0.9), rng.range(-0.6, 0.6)),
+                rise: rng.range(0.8, 1.6),
+                ttl: rng.range(1.2, 2.2),
+                expand: 2.6,
+                start_scale: rng.range(0.5, 0.95),
+                spin_rate: rng.range(-1.6, 1.6),
+                start_alpha: 0.5,
+            },
+            &mut rng,
+        );
+    }
+}
+
 /// A muzzle flash: a big star plus (for the main gun) fire wisps.
 pub fn spawn_muzzle_flash(
     commands: &mut Commands,
