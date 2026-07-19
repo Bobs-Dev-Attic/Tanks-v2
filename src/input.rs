@@ -111,9 +111,11 @@ fn gather_input(
         (keys.pressed(pos) as i32 - keys.pressed(neg) as i32) as f32
     };
     game.orbit.y += key_axis(KeyCode::KeyF, KeyCode::KeyR) * 60.0 * dt;
-    game.zoom += key_axis(KeyCode::KeyX, KeyCode::KeyZ) * 30.0 * dt;
+    // Zoom is discrete: one notch (or Z/X press) is one level step.
+    game.zoom +=
+        (keys.just_pressed(KeyCode::KeyZ) as i32 - keys.just_pressed(KeyCode::KeyX) as i32) as f32;
     for ev in wheel.read() {
-        game.zoom += ev.y * 2.2;
+        game.zoom += ev.y.signum();
     }
 
     // --- Drive: keyboard + on-screen left stick ---

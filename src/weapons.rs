@@ -9,7 +9,7 @@
 
 use crate::camera::IsoCamera;
 use crate::control::PlayerControlled;
-use crate::effects::{spawn_explosion, spawn_impact_puff, spawn_muzzle_flash, EffectAssets};
+use crate::effects::{spawn_explosion, spawn_impact_puff, spawn_muzzle_flash, EffectAssets, Wreckage};
 use crate::input::GameInput;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
@@ -131,6 +131,10 @@ pub struct Weapons {
     mg: Timer,
     /// A pending "fire the main gun" request, honored when laid and loaded.
     fire_requested: bool,
+    /// The committed impact point for the pending shot.
+    fire_target: Option<Vec3>,
+    /// The on-ground marker entity shown while a shot is pending.
+    marker: Option<Entity>,
     /// Crew/vehicle condition in 0..1; scales traverse, elevation, and reload.
     condition: f32,
 }
@@ -145,6 +149,8 @@ impl Default for Weapons {
             main,
             mg,
             fire_requested: false,
+            fire_target: None,
+            marker: None,
             condition: 1.0,
         }
     }
@@ -167,6 +173,8 @@ struct WeaponAssets {
     shell_mat: Handle<StandardMaterial>,
     tracer_mesh: Handle<Mesh>,
     tracer_mat: Handle<StandardMaterial>,
+    marker_mesh: Handle<Mesh>,
+    marker_mat: Handle<StandardMaterial>,
 }
 
 fn setup_weapon_assets(
@@ -174,16 +182,25 @@ fn setup_weapon_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let shell_mesh = meshes.add(Sphere::new(0.18));
+    // Projectiles are little polygon bolts, not spheres.
+    let shell_mesh = meshes.add(Cuboid::new(0.22, 0.22, 0.5));
     let shell_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.2, 0.18, 0.15),
         emissive: LinearRgba::rgb(1.2, 0.5, 0.15),
         ..default()
     });
-    let tracer_mesh = meshes.add(Sphere::new(0.1));
+    let tracer_mesh = meshes.add(Cuboid::new(0.1, 0.1, 0.6));
     let tracer_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(1.0, 0.9, 0.4),
         emissive: LinearRgba::rgb(4.0, 3.0, 0.6),
+        unlit: true,
+        ..default()
+    });
+    // Target marker: a flat ring on the ground.
+    let marker_mesh = meshes.add(Torus::new(0.72, 0.95));
+    let marker_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.25, 0.2),
+        emissive: LinearRgba::rgb(3.5, 0.4, 0.3),
         unlit: true,
         ..default()
     });
@@ -192,6 +209,8 @@ fn setup_weapon_assets(
         shell_mat,
         tracer_mesh,
         tracer_mat,
+        marker_mesh,
+        marker_mat,
     });
 }
 
@@ -228,11 +247,35 @@ fn operate_main_gun(
     // Reload progresses slower when the tank is in poor condition.
     weapon.main.tick(Duration::from_secs_f32(dt * cond));
 
-    let target = input
+    let live_target = input
         .aim
         .zip(cameras.get_single().ok())
         .zip(terrain.as_ref())
         .and_then(|((screen, (camera, cam_tf)), t)| cursor_ground(screen, camera, cam_tf, t));
+
+    // A fresh fire request commits the current aim point and drops a marker.
+    if input.fire_main && !weapon.fire_requested {
+        if let Some(tp) = live_target {
+            weapon.fire_requested = true;
+            weapon.fire_target = Some(tp);
+            let marker = commands
+                .spawn((
+                    Mesh3d(assets.marker_mesh.clone()),
+                    MeshMaterial3d(assets.marker_mat.clone()),
+                    Transform::from_translation(tp + Vec3::Y * 0.1),
+                ))
+                .id();
+            weapon.marker = Some(marker);
+        }
+    }
+
+    // While a shot is pending, lay the gun on the committed point; otherwise
+    // keep following the live aim.
+    let target = if weapon.fire_requested {
+        weapon.fire_target
+    } else {
+        live_target
+    };
 
     let (_, root_rot, root_pos) = root_gt.to_scale_rotation_translation();
 
@@ -265,10 +308,7 @@ fn operate_main_gun(
         gun.aligned = false;
     }
 
-    // --- Fire control: request now, shoot when laid and loaded ---
-    if input.fire_main {
-        weapon.fire_requested = true;
-    }
+    // --- Fire when laid and loaded; the marker disappears as the shell leaves ---
     if weapon.fire_requested && weapon.main.finished() && turret.aligned && gun.aligned {
         if let Ok(muzzle) = muzzles.get_single() {
             let (_, muzzle_rot, muzzle_pos) = muzzle.to_scale_rotation_translation();
@@ -292,6 +332,10 @@ fn operate_main_gun(
             shake.magnitude = 0.2;
             weapon.main.reset();
             weapon.fire_requested = false;
+            weapon.fire_target = None;
+            if let Some(marker) = weapon.marker.take() {
+                commands.entity(marker).despawn_recursive();
+            }
         }
     }
 
@@ -357,11 +401,13 @@ fn fire_machine_gun(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_projectiles(
     mut commands: Commands,
     time: Res<Time>,
     terrain: Option<Res<Terrain>>,
     effects: Option<Res<EffectAssets>>,
+    mut wreckage: ResMut<Wreckage>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut shells: Query<(Entity, &mut Shell, &mut Transform), Without<Tracer>>,
     mut tracers: Query<(Entity, &mut Tracer, &mut Transform), Without<Shell>>,
@@ -381,7 +427,14 @@ fn update_projectiles(
         if tf.translation.y <= ground + 0.1 || out {
             if let Some(fx) = effects.as_ref() {
                 let at = Vec3::new(tf.translation.x, ground, tf.translation.z);
-                spawn_explosion(&mut commands, fx, &mut materials, at, seed ^ entity.index());
+                spawn_explosion(
+                    &mut commands,
+                    fx,
+                    &mut materials,
+                    &mut wreckage,
+                    at,
+                    seed ^ entity.index(),
+                );
             }
             commands.entity(entity).despawn_recursive();
         }
