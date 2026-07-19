@@ -93,7 +93,7 @@
     <div id="boot">
       <h1>TANKS-V2</h1>
       <div class="sub">WWII Isometric Squad Commander</div>
-      <div class="ver" id="boot-version">v0.3.0</div>
+      <div class="ver" id="boot-version">v0.4.0</div>
       <div class="sub">Loading battlefield…</div>
       <div class="bar"><span></span></div>
     </div>
@@ -102,7 +102,7 @@
       // The ?v= query busts caches per release: the JS and wasm filenames are
       // stable across versions, so without this a browser holding an old
       // immutable copy would keep running the previous build.
-      import init from "./tanks.js?v=0.3.0";
+      import init from "./tanks.js?v=0.4.0";
 
       const boot = document.getElementById("boot");
 
@@ -112,7 +112,7 @@
       // game runs fine. This safety net reveals the canvas if that ever fails.
       setTimeout(() => boot && boot.classList.add("hidden"), 25000);
 
-      init({ module_or_path: "./tanks_bg.wasm?v=0.3.0" }).catch((err) => {
+      init({ module_or_path: "./tanks_bg.wasm?v=0.4.0" }).catch((err) => {
         // Expected on wasm (winit control-flow exception) — the game is still
         // running. Only surface a real, early failure.
         console.debug("init() threw (expected on wasm):", err);

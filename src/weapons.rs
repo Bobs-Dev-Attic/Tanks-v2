@@ -9,10 +9,11 @@
 
 use crate::camera::IsoCamera;
 use crate::control::PlayerControlled;
-use crate::effects::{spawn_explosion, spawn_impact_puff, EffectAssets};
+use crate::effects::{spawn_explosion, spawn_impact_puff, spawn_muzzle_flash, EffectAssets};
 use crate::input::GameInput;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
+use bevy::transform::TransformSystem;
 use std::f32::consts::{FRAC_PI_4, PI, TAU};
 use std::time::Duration;
 
@@ -29,10 +30,42 @@ pub struct WeaponsPlugin;
 
 impl Plugin for WeaponsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_weapon_assets).add_systems(
-            Update,
-            (operate_main_gun, fire_machine_gun, update_projectiles),
-        );
+        app.add_systems(Startup, setup_weapon_assets)
+            .add_systems(
+                Update,
+                (operate_main_gun, fire_machine_gun, update_projectiles),
+            )
+            // Shake is applied after physics has placed the hull, just before
+            // transforms propagate, so the jitter is purely visual.
+            .add_systems(
+                PostUpdate,
+                apply_shake.before(TransformSystem::TransformPropagate),
+            );
+    }
+}
+
+/// A short recoil shake applied to a tank's hull after firing.
+#[derive(Component, Default)]
+pub struct Shake {
+    time: f32,
+    duration: f32,
+    magnitude: f32,
+}
+
+fn apply_shake(time: Res<Time>, mut shakers: Query<(&mut Transform, &mut Shake)>) {
+    let dt = time.delta_secs();
+    for (mut tf, mut shake) in &mut shakers {
+        if shake.time <= 0.0 {
+            continue;
+        }
+        shake.time -= dt;
+        let k = (shake.time / shake.duration).clamp(0.0, 1.0);
+        let amp = shake.magnitude * k;
+        let f = shake.time * 62.0;
+        tf.translation.x += amp * (f * 1.1).sin();
+        tf.translation.y += amp * 0.6 * (f * 1.7).sin();
+        tf.translation.z += amp * (f * 0.9).cos();
+        tf.rotate_local_z(amp * 0.06 * f.sin());
     }
 }
 
@@ -65,7 +98,12 @@ pub struct GunMount {
     max: f32,
     elev: f32,
     aligned: bool,
+    /// Current recoil slide (world units the gun is pushed back).
+    recoil: f32,
 }
+
+/// Local position of the gun-mount pivot (the trunnion) on the turret.
+const GUN_PIVOT: Vec3 = Vec3::new(0.0, 1.5, -0.9);
 
 impl GunMount {
     pub fn new(rate: f32) -> Self {
@@ -75,6 +113,7 @@ impl GunMount {
             max: FRAC_PI_4,  // 45° for maximum range
             elev: 0.0,
             aligned: false,
+            recoil: 0.0,
         }
     }
 }
@@ -157,6 +196,7 @@ fn setup_weapon_assets(
 }
 
 /// Traverse the turret, lay the gun, and fire the main gun when ready.
+#[allow(clippy::too_many_arguments)]
 fn operate_main_gun(
     mut commands: Commands,
     time: Res<Time>,
@@ -164,12 +204,18 @@ fn operate_main_gun(
     cameras: Query<(&Camera, &GlobalTransform), With<IsoCamera>>,
     terrain: Option<Res<Terrain>>,
     assets: Res<WeaponAssets>,
+    effects: Option<Res<EffectAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     muzzles: Query<&GlobalTransform, With<Muzzle>>,
-    mut roots: Query<(&GlobalTransform, &mut Weapons), With<PlayerControlled>>,
+    mut roots: Query<(&GlobalTransform, &mut Weapons, &mut Shake), With<PlayerControlled>>,
     mut turrets: Query<(&mut Transform, &mut Turret), Without<GunMount>>,
     mut guns: Query<(&mut Transform, &mut GunMount), Without<Turret>>,
 ) {
-    let (Ok((root_gt, mut weapon)), Ok((mut turret_tf, mut turret)), Ok((mut gun_tf, mut gun))) = (
+    let (
+        Ok((root_gt, mut weapon, mut shake)),
+        Ok((mut turret_tf, mut turret)),
+        Ok((mut gun_tf, mut gun)),
+    ) = (
         roots.get_single_mut(),
         turrets.get_single_mut(),
         guns.get_single_mut(),
@@ -235,13 +281,27 @@ fn operate_main_gun(
                     vel: forward * SHELL_SPEED,
                 },
             ));
+            // Big muzzle flash, gun recoil, and a hull shake.
+            if let Some(fx) = effects.as_ref() {
+                let seed = (time.elapsed_secs() * 733.0) as u32 | 1;
+                spawn_muzzle_flash(&mut commands, fx, &mut materials, muzzle_pos, 2.4, seed);
+            }
+            gun.recoil = 0.55;
+            shake.time = 0.35;
+            shake.duration = 0.35;
+            shake.magnitude = 0.2;
             weapon.main.reset();
             weapon.fire_requested = false;
         }
     }
+
+    // Recoil slides the gun back, then eases home.
+    gun.recoil = (gun.recoil - gun.recoil * 9.0 * dt).max(0.0);
+    gun_tf.translation = GUN_PIVOT + Vec3::Z * gun.recoil;
 }
 
 /// The machine gun sprays tracers toward the aim point; direct fire, no waiting.
+#[allow(clippy::too_many_arguments)]
 fn fire_machine_gun(
     mut commands: Commands,
     time: Res<Time>,
@@ -249,6 +309,8 @@ fn fire_machine_gun(
     cameras: Query<(&Camera, &GlobalTransform), With<IsoCamera>>,
     terrain: Option<Res<Terrain>>,
     assets: Res<WeaponAssets>,
+    effects: Option<Res<EffectAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     muzzles: Query<&GlobalTransform, With<Muzzle>>,
     mut weapons: Query<&mut Weapons, With<PlayerControlled>>,
 ) {
@@ -262,6 +324,12 @@ fn fire_machine_gun(
     weapon.mg.reset();
 
     let (_, muzzle_rot, muzzle_pos) = muzzle.to_scale_rotation_translation();
+
+    // Small muzzle flash for each round.
+    if let Some(fx) = effects.as_ref() {
+        let seed = (time.elapsed_secs() * 971.0) as u32 | 1;
+        spawn_muzzle_flash(&mut commands, fx, &mut materials, muzzle_pos, 0.55, seed);
+    }
     let forward = muzzle_rot * Vec3::NEG_Z;
     let aim_dir = input
         .aim

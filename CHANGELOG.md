@@ -3,6 +3,26 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.4.0] - 2026-07-19
+
+### Added
+- **Muzzle flashes** built from star polygons — a small one per machine-gun round
+  and a big flash (plus fire wisps) for the main gun.
+- **Firing feedback**: the gun recoils and the whole hull shakes when the main
+  gun fires.
+- **Greater tank detail**: sloped glacis, engine deck, fenders, headlights,
+  exhausts, turret bustle, commander's hatch, antenna, and a muzzle brake, with
+  gradient-shaded armor (vertex-colour gradients) for depth.
+- **Realistic running gear**: drive sprocket, idler, road wheels, and return
+  rollers that spin at radius-appropriate rates, plus cleated track links that
+  march around the bottom run and wrap, alongside the scrolling track band.
+
+### Changed
+- Explosions, fire, smoke, and dust are now camera-facing **polygons with vertex
+  gradients** that rotate and fade (no round sprites); debris are angular shards.
+- **Wider zoom range** with smooth multiplicative zoom (much closer and much
+  farther than before).
+
 ## [0.3.0] - 2026-07-19
 
 ### Changed
