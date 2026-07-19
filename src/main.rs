@@ -57,10 +57,12 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest()),
         )
-        .insert_resource(ClearColor(Color::srgb(0.62, 0.72, 0.85)))
+        .insert_resource(ClearColor(Color::srgb(0.52, 0.64, 0.78)))
+        // Lower, cooler ambient (was a very bright 380 that washed everything
+        // flat) so the sun below actually shapes the geometry.
         .insert_resource(AmbientLight {
-            color: Color::srgb(0.85, 0.88, 1.0),
-            brightness: 380.0,
+            color: Color::srgb(0.55, 0.62, 0.80),
+            brightness: 150.0,
         })
         .init_state::<GameState>()
         .add_plugins((
@@ -79,16 +81,18 @@ fn main() {
         .run();
 }
 
-/// A single warm sun plus soft ambient — enough to make the flat-shaded
-/// low-poly geometry read cleanly without an expensive lighting setup.
+/// A strong, warm low-angle sun over cool ambient fill — the contrast between
+/// them shades the flat-shaded low-poly geometry so it reads with depth (a
+/// golden-hour look) instead of the old washed-out flatness.
 fn setup_lighting(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
-            color: Color::srgb(1.0, 0.96, 0.86),
-            illuminance: 11_000.0,
+            color: Color::srgb(1.0, 0.95, 0.84),
+            illuminance: 16_000.0,
             shadows_enabled: true,
             ..default()
         },
-        Transform::from_xyz(60.0, 120.0, 40.0).looking_at(Vec3::ZERO, Vec3::Y),
+        // Lower on the horizon than before, for longer, more legible shadows.
+        Transform::from_xyz(95.0, 80.0, 55.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
