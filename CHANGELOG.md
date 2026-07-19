@@ -3,6 +3,14 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.7.4] - 2026-07-19
+
+### Changed
+- **The target indicator is bigger, brighter, and zoom-aware.** It now sizes
+  itself to a fraction of the camera's view, so it stays large and prominent when
+  you're zoomed out (instead of shrinking to a speck), and its ring glows more
+  vividly.
+
 ## [0.7.3] - 2026-07-19
 
 ### Fixed
