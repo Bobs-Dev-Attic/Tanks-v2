@@ -23,6 +23,10 @@ const DRAG_THRESHOLD: f32 = 8.0;
 pub const BTN_R: f32 = 60.0;
 /// Distance of a button's centre from the bottom-right corner.
 pub const BTN_MARGIN: f32 = 80.0;
+/// Extent (logical px) of the drive-stick's active zone in the bottom-left
+/// corner — sized to the on-screen stick base (150px at a 20px margin) plus a
+/// little slack, so touches anywhere else are free for targeting.
+pub const STICK_ZONE: f32 = 200.0;
 
 pub struct InputPlugin;
 
@@ -124,11 +128,16 @@ fn gather_input(
     );
     let mg_center = mg_button_center(w, h);
     let on_button = |p: Vec2| p.distance(mg_center) < BTN_R;
+    // The drive stick only claims touches that begin on its on-screen base in the
+    // bottom-left corner (see `ui::spawn_mobile_controls`). Keeping this zone
+    // tight leaves the rest of the screen — including most of the lower-left —
+    // free for designating targets.
+    let in_stick = |p: Vec2| p.x < STICK_ZONE && p.y > h - STICK_ZONE;
 
     for t in touches.iter() {
         let start = t.start_position();
-        // Left thumb-stick: any touch that began in the lower-left area.
-        if start.x < w * 0.42 && start.y > h * 0.30 {
+        // Left thumb-stick: a touch that began on the stick base.
+        if in_stick(start) {
             let d = t.position() - start;
             let radius = 70.0;
             drive.x += (d.x / radius).clamp(-1.0, 1.0);
@@ -139,9 +148,7 @@ fn gather_input(
     game.drive = drive.clamp(Vec2::splat(-1.0), Vec2::splat(1.0));
 
     // "Free" touches are those not on the left stick and not on a button.
-    let is_free = |start: Vec2| {
-        !(start.x < w * 0.42 && start.y > h * 0.30) && !on_button(start)
-    };
+    let is_free = |start: Vec2| !in_stick(start) && !on_button(start);
     let free: Vec<_> = touches.iter().filter(|t| is_free(t.start_position())).collect();
 
     // --- Pinch to zoom (two free fingers) or single-finger aim ---
