@@ -184,12 +184,13 @@ fn reveal_mobile_controls(
 }
 
 fn spawn_mobile_controls(commands: &mut Commands) {
-    use crate::input::{BTN_MARGIN, BTN_R, FIRE_OFFSET_Y};
+    use crate::input::{BTN_MARGIN, BTN_R};
     let diameter = BTN_R * 2.0;
     let edge = BTN_MARGIN - BTN_R;
 
-    // A round on-screen button with a centered label. Scoped so its mutable
-    // borrow of `commands` is released before the stick is spawned below.
+    // The MG button. (The main gun is fired by double-tapping the battlefield,
+    // so there is no separate FIRE button.) Scoped so its mutable borrow of
+    // `commands` is released before the stick is spawned below.
     {
         let mut button = |right: f32, bottom: f32, color: Color, label: &str| {
             commands
@@ -223,12 +224,6 @@ fn spawn_mobile_controls(commands: &mut Commands) {
     };
 
         button(edge, edge, Color::srgba(0.75, 0.7, 0.25, 0.30), "MG");
-        button(
-            edge,
-            edge + FIRE_OFFSET_Y,
-            Color::srgba(0.8, 0.3, 0.2, 0.32),
-            "FIRE",
-        );
     }
 
     // Left thumb-stick base (the stick itself is dynamic; this is a guide).

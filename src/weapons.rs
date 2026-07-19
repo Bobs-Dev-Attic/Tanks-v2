@@ -9,7 +9,9 @@
 
 use crate::camera::IsoCamera;
 use crate::control::PlayerControlled;
-use crate::effects::{spawn_explosion, spawn_impact_puff, spawn_muzzle_flash, EffectAssets, Wreckage};
+use crate::effects::{
+    spawn_explosion, spawn_gun_smoke, spawn_impact_puff, spawn_muzzle_flash, EffectAssets, Wreckage,
+};
 use crate::input::GameInput;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
@@ -169,10 +171,19 @@ impl Default for Weapons {
     }
 }
 
-/// The pulsing ring that marks the committed target.
+/// The pulsing ring that marks the committed target. It owns its own material
+/// so it can pulse and fade independently of any later marker.
 #[derive(Component)]
 pub struct TargetMarker {
     age: f32,
+    mat: Handle<StandardMaterial>,
+    base_y: f32,
+}
+
+/// Added to a marker once the shot is away: it expands, rises, and fades out.
+#[derive(Component)]
+pub struct MarkerFading {
+    t: f32,
 }
 
 #[derive(Component)]
@@ -193,7 +204,6 @@ struct WeaponAssets {
     tracer_mesh: Handle<Mesh>,
     tracer_mat: Handle<StandardMaterial>,
     marker_mesh: Handle<Mesh>,
-    marker_mat: Handle<StandardMaterial>,
 }
 
 fn setup_weapon_assets(
@@ -216,21 +226,14 @@ fn setup_weapon_assets(
         ..default()
     });
     // Target marker: a flat ring that pulses toward the center of the target.
+    // Each spawned marker gets its own material instance (see operate_main_gun).
     let marker_mesh = meshes.add(Torus::new(0.72, 0.95));
-    let marker_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(1.0, 0.25, 0.2, 1.0),
-        emissive: LinearRgba::rgb(2.0, 0.25, 0.2),
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        ..default()
-    });
     commands.insert_resource(WeaponAssets {
         shell_mesh,
         shell_mat,
         tracer_mesh,
         tracer_mat,
         marker_mesh,
-        marker_mat,
     });
 }
 
@@ -290,12 +293,24 @@ fn operate_main_gun(
                 .as_ref()
                 .map(|t| solve_elevation(t, launch, tp, SHELL_SPEED, SHELL_GRAVITY, gun.min, gun.max))
                 .unwrap_or(0.0);
+            let base_y = tp.y + 0.1;
+            let marker_mat = materials.add(StandardMaterial {
+                base_color: Color::srgba(1.0, 0.25, 0.2, 0.85),
+                emissive: LinearRgba::rgb(2.0, 0.25, 0.2),
+                unlit: true,
+                alpha_mode: AlphaMode::Blend,
+                ..default()
+            });
             let marker = commands
                 .spawn((
                     Mesh3d(assets.marker_mesh.clone()),
-                    MeshMaterial3d(assets.marker_mat.clone()),
-                    Transform::from_translation(tp + Vec3::Y * 0.1),
-                    TargetMarker { age: 0.0 },
+                    MeshMaterial3d(marker_mat.clone()),
+                    Transform::from_translation(Vec3::new(tp.x, base_y, tp.z)),
+                    TargetMarker {
+                        age: 0.0,
+                        mat: marker_mat,
+                        base_y,
+                    },
                 ))
                 .id();
             weapon.marker = Some(marker);
@@ -332,10 +347,11 @@ fn operate_main_gun(
                     vel: forward * SHELL_SPEED,
                 },
             ));
-            // Big muzzle flash, gun recoil, and a hull shake.
+            // Big muzzle flash, drifting gun smoke, recoil, and a hull shake.
             if let Some(fx) = effects.as_ref() {
                 let seed = (time.elapsed_secs() * 733.0) as u32 | 1;
                 spawn_muzzle_flash(&mut commands, fx, &mut materials, muzzle_pos, 2.4, seed);
+                spawn_gun_smoke(&mut commands, fx, &mut materials, muzzle_pos, forward, seed ^ 0x51);
             }
             gun.recoil = 0.55;
             shake.time = 0.35;
@@ -344,8 +360,9 @@ fn operate_main_gun(
             weapon.main.reset();
             weapon.fire_requested = false;
             weapon.fire_target = None;
+            // The marker fades out after the shot instead of vanishing instantly.
             if let Some(marker) = weapon.marker.take() {
-                commands.entity(marker).despawn_recursive();
+                commands.entity(marker).insert(MarkerFading { t: 0.0 });
             }
         }
     }
@@ -538,21 +555,39 @@ fn simulate_impact(
     pos
 }
 
-/// Animate the target marker: a ring that pulses inward toward the center.
+/// Animate the target marker: while pending, a ring that pulses inward toward
+/// the center and bobs vertically; once the shot is away, it expands, rises, and
+/// fades out before despawning.
 fn pulse_marker(
     time: Res<Time>,
-    assets: Res<WeaponAssets>,
+    mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut markers: Query<(&mut Transform, &mut TargetMarker)>,
+    mut markers: Query<(Entity, &mut Transform, &mut TargetMarker, Option<&mut MarkerFading>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut tf, mut marker) in &mut markers {
+    let period = 0.7;
+    for (entity, mut tf, mut marker, fading) in &mut markers {
         marker.age += dt;
-        let period = 0.7;
+        if let Some(mut fade) = fading {
+            // After firing: swell and rise while fading to nothing.
+            fade.t += dt;
+            let f = (fade.t / 0.5).clamp(0.0, 1.0);
+            tf.scale = Vec3::splat(0.12 + 1.7 * f);
+            tf.translation.y = marker.base_y + 1.4 * f;
+            if let Some(mat) = materials.get_mut(&marker.mat) {
+                mat.base_color = mat.base_color.with_alpha(0.7 * (1.0 - f));
+            }
+            if fade.t >= 0.5 {
+                commands.entity(entity).despawn_recursive();
+            }
+            continue;
+        }
         let t = (marker.age % period) / period;
         // Contract from wide to the center, fading as it converges.
         tf.scale = Vec3::splat(1.75 * (1.0 - t) + 0.12);
-        if let Some(mat) = materials.get_mut(&assets.marker_mat) {
+        // Vertical pulse: the ring bobs up and settles in step with the pulse.
+        tf.translation.y = marker.base_y + 0.55 * (marker.age * TAU / period).sin().abs();
+        if let Some(mat) = materials.get_mut(&marker.mat) {
             mat.base_color = mat.base_color.with_alpha(0.85 * (1.0 - t) + 0.1);
         }
     }

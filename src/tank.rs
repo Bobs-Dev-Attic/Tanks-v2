@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy::render::mesh::VertexAttributeValues;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, PI};
 
 /// Length of the visible bottom track run (where links march and wrap).
 const TRACK_RUN: f32 = 4.8;
@@ -82,6 +82,27 @@ fn spawn_training_mission(
         0.0,
         Team::Player,
     );
+
+    // A few dark-gray enemy panzers downrange to shoot at. The tank's front is
+    // -Z, so these sit ahead of the player; yaw PI turns them to face back.
+    for (dx, dz) in [(-20.0, -34.0), (6.0, -44.0), (30.0, -28.0)] {
+        let px = center.x + dx;
+        let pz = center.y + dz;
+        let g = terrain
+            .as_ref()
+            .map(|t| t.height_at(px, pz))
+            .unwrap_or(0.0);
+        spawn_tank(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+            Vec2::new(px, pz),
+            g + 0.6,
+            PI,
+            Team::Enemy,
+        );
+    }
 }
 
 fn spawn_tank(
@@ -118,7 +139,8 @@ fn spawn_tank(
     // --- Materials ---
     let body_color = match team {
         Team::Player => Color::srgb(0.32, 0.37, 0.2),
-        Team::Enemy => Color::srgb(0.31, 0.32, 0.35),
+        // Panzergrau — a dark battleship gray.
+        Team::Enemy => Color::srgb(0.15, 0.16, 0.18),
     };
     let hull_mat = materials.add(StandardMaterial {
         base_color: body_color,
@@ -155,12 +177,18 @@ fn spawn_tank(
         ..default()
     });
 
+    // Only the player's tank gets working weapon components (Turret / GunMount /
+    // Muzzle / HullMg). Enemy panzers are static targets, so their turret and gun
+    // are purely visual — this also keeps the player's parts unique singletons
+    // for the weapon systems.
+    let is_player = team == Team::Player;
+
     let start = Vec3::new(ground_xz.x, start_y, ground_xz.y);
     let mut vehicle = Vehicle::default();
     vehicle.yaw = yaw;
-    if team == Team::Enemy {
-        vehicle.max_speed = 0.0;
-    }
+    // Enemies keep a normal max_speed (a zero would divide-by-zero in the
+    // physics' speed factor and NaN out their position). Nothing writes their
+    // throttle, so they stay parked as static targets.
 
     let mut wheels: Vec<(Entity, f32)> = Vec::new();
     let mut links: Vec<(Entity, f32)> = Vec::new();
@@ -219,11 +247,14 @@ fn spawn_tank(
         }
         // Hull machine gun at the front (co-driver's position). The marker is
         // an unrotated point so its -Z is hull-forward; a short barrel is visual.
-        p.spawn((
-            Transform::from_xyz(0.55, 0.95, -2.4),
-            Visibility::default(),
-            HullMg,
-        ));
+        // Only the player fires, so only the player gets the HullMg marker.
+        if is_player {
+            p.spawn((
+                Transform::from_xyz(0.55, 0.95, -2.4),
+                Visibility::default(),
+                HullMg,
+            ));
+        }
         p.spawn((
             Mesh3d(mg_barrel_mesh.clone()),
             MeshMaterial3d(metal_mat.clone()),
@@ -231,8 +262,11 @@ fn spawn_tank(
         ));
 
         // --- Turret assembly (yaw) with nested gun mount (pitch) ---
-        p.spawn((Transform::default(), Visibility::default(), Turret::new(0.9)))
-            .with_children(|t| {
+        let mut turret_ec = p.spawn((Transform::default(), Visibility::default()));
+        if is_player {
+            turret_ec.insert(Turret::new(0.9));
+        }
+        turret_ec.with_children(|t| {
                 t.spawn((
                     Mesh3d(turret_mesh.clone()),
                     MeshMaterial3d(hull_mat.clone()),
@@ -255,13 +289,12 @@ fn spawn_tank(
                     MeshMaterial3d(dark_mat.clone()),
                     Transform::from_xyz(0.8, 3.0, 0.6),
                 ));
-                // Gun mount at the trunnion.
-                t.spawn((
-                    Transform::from_xyz(0.0, 1.5, -0.9),
-                    Visibility::default(),
-                    GunMount::new(0.5),
-                ))
-                .with_children(|g| {
+                // Gun mount at the trunnion (functional only for the player).
+                let mut gun_ec = t.spawn((Transform::from_xyz(0.0, 1.5, -0.9), Visibility::default()));
+                if is_player {
+                    gun_ec.insert(GunMount::new(0.5));
+                }
+                gun_ec.with_children(|g| {
                     g.spawn((
                         Mesh3d(mantlet_mesh.clone()),
                         MeshMaterial3d(hull_mat.clone()),
@@ -279,7 +312,9 @@ fn spawn_tank(
                         MeshMaterial3d(metal_mat.clone()),
                         Transform::from_xyz(0.0, 0.0, -2.85),
                     ));
-                    g.spawn((Transform::from_xyz(0.0, 0.0, -3.1), Muzzle));
+                    if is_player {
+                        g.spawn((Transform::from_xyz(0.0, 0.0, -3.1), Muzzle));
+                    }
                 });
             });
 
