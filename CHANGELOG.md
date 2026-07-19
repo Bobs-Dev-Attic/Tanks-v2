@@ -3,6 +3,17 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.2.1] - 2026-07-19
+
+### Added
+- **Mobile touch controls**: an on-screen left thumb-stick drives, dragging the
+  right side of the screen aims the turret, and FIRE / MG buttons fire the main
+  gun and machine gun. The controls appear the first time you touch the screen.
+- Unified input: keyboard/mouse and touch both feed one drive/aim/fire path.
+
+### Changed
+- On-screen instructions updated to cover both keyboard/mouse and touch.
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

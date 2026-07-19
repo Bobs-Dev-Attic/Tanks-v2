@@ -9,18 +9,27 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LoadingTimer(Timer::from_seconds(1.4, TimerMode::Once)))
+            .init_resource::<MobileControlsShown>()
             .add_systems(OnEnter(GameState::Loading), spawn_loading)
             .add_systems(OnExit(GameState::Loading), despawn::<LoadingRoot>)
             .add_systems(OnEnter(GameState::Playing), (spawn_hud, dismiss_html_overlay))
+            .add_systems(Update, tick_loading.run_if(in_state(GameState::Loading)))
             .add_systems(
                 Update,
-                tick_loading.run_if(in_state(GameState::Loading)),
+                reveal_mobile_controls.run_if(in_state(GameState::Playing)),
             );
     }
 }
 
 #[derive(Resource)]
 struct LoadingTimer(Timer);
+
+/// Whether the on-screen touch controls have been shown yet (first touch).
+#[derive(Resource, Default)]
+struct MobileControlsShown(bool);
+
+#[derive(Component)]
+struct MobileControls;
 
 #[derive(Component)]
 struct LoadingRoot;
@@ -108,11 +117,11 @@ fn spawn_hud(mut commands: Commands) {
         .with_children(|p| {
             for line in [
                 "TRAINING — DRIVE & FIGHT",
-                "Drive: W S / ↑ ↓    Steer: A D / ← →",
-                "Turret aims at the mouse cursor",
+                "Keyboard: W A S D / arrows drive • mouse aims turret",
                 "Main gun: E / left-click    MG: Q / right-click",
+                "Touch: left stick drives • drag right side to aim",
+                "         FIRE = main gun • MG button = machine gun",
                 "Camera: middle-drag orbit • R F pitch • wheel zoom",
-                "Camera follows your tank.",
             ] {
                 p.spawn((
                     Text::new(line),
@@ -157,6 +166,99 @@ fn dismiss_html_overlay() {
             element.set_class_name("hidden");
         }
     }
+}
+
+/// Show the on-screen touch controls the first time the player touches the
+/// screen (so they never clutter a desktop session).
+fn reveal_mobile_controls(
+    mut commands: Commands,
+    mut shown: ResMut<MobileControlsShown>,
+    touches: Res<Touches>,
+) {
+    if shown.0 || touches.iter().next().is_none() {
+        return;
+    }
+    shown.0 = true;
+    spawn_mobile_controls(&mut commands);
+}
+
+fn spawn_mobile_controls(commands: &mut Commands) {
+    use crate::input::{BTN_MARGIN, BTN_R, FIRE_OFFSET_Y};
+    let diameter = BTN_R * 2.0;
+    let edge = BTN_MARGIN - BTN_R;
+
+    // A round on-screen button with a centered label. Scoped so its mutable
+    // borrow of `commands` is released before the stick is spawned below.
+    {
+        let mut button = |right: f32, bottom: f32, color: Color, label: &str| {
+            commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(right),
+                    bottom: Val::Px(bottom),
+                    width: Val::Px(diameter),
+                    height: Val::Px(diameter),
+                    border: UiRect::all(Val::Px(2.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(color),
+                BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                BorderRadius::all(Val::Percent(50.0)),
+                MobileControls,
+            ))
+            .with_children(|p| {
+                p.spawn((
+                    Text::new(label),
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.95, 0.95, 0.9)),
+                ));
+            });
+    };
+
+        button(edge, edge, Color::srgba(0.75, 0.7, 0.25, 0.30), "MG");
+        button(
+            edge,
+            edge + FIRE_OFFSET_Y,
+            Color::srgba(0.8, 0.3, 0.2, 0.32),
+            "FIRE",
+        );
+    }
+
+    // Left thumb-stick base (the stick itself is dynamic; this is a guide).
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(20.0),
+                bottom: Val::Px(20.0),
+                width: Val::Px(150.0),
+                height: Val::Px(150.0),
+                border: UiRect::all(Val::Px(2.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.06)),
+            BorderColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
+            BorderRadius::all(Val::Percent(50.0)),
+            MobileControls,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Text::new("MOVE"),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.9, 0.9, 0.85, 0.7)),
+            ));
+        });
 }
 
 fn despawn<C: Component>(mut commands: Commands, query: Query<Entity, With<C>>) {

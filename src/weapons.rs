@@ -7,9 +7,9 @@
 use crate::camera::IsoCamera;
 use crate::control::PlayerControlled;
 use crate::effects::{spawn_explosion, spawn_impact_puff, EffectAssets};
+use crate::input::GameInput;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use std::time::Duration;
 
 pub struct WeaponsPlugin;
@@ -94,24 +94,22 @@ fn setup_weapon_assets(
     });
 }
 
-/// Yaw each turret to face the ground point under the mouse cursor.
+/// Yaw each turret to face the aim point (mouse cursor or right-side touch).
 fn aim_turret(
     time: Res<Time>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    input: Res<GameInput>,
     cameras: Query<(&Camera, &GlobalTransform), With<IsoCamera>>,
     terrain: Option<Res<Terrain>>,
     parents: Query<&GlobalTransform>,
     mut turrets: Query<(&Parent, &mut Transform), With<Turret>>,
 ) {
-    let (Some(terrain), Ok(window), Ok((camera, cam_tf))) =
-        (terrain, windows.get_single(), cameras.get_single())
-    else {
+    let (Some(terrain), Ok((camera, cam_tf))) = (terrain, cameras.get_single()) else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
+    let Some(screen) = input.aim else {
         return;
     };
-    let Some(target) = cursor_ground(cursor, camera, cam_tf, &terrain) else {
+    let Some(target) = cursor_ground(screen, camera, cam_tf, &terrain) else {
         return;
     };
 
@@ -133,13 +131,10 @@ fn aim_turret(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn fire_weapons(
     mut commands: Commands,
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    input: Res<GameInput>,
     cameras: Query<(&Camera, &GlobalTransform), With<IsoCamera>>,
     terrain: Option<Res<Terrain>>,
     assets: Res<WeaponAssets>,
@@ -155,20 +150,18 @@ fn fire_weapons(
     let (_, muzzle_rot, muzzle_pos) = muzzle.to_scale_rotation_translation();
     let forward = muzzle_rot * Vec3::NEG_Z;
 
-    // Aim toward the cursor's ground point if we have one, else straight ahead.
-    let aim_dir = terrain
-        .as_ref()
-        .zip(windows.get_single().ok())
-        .zip(cameras.get_single().ok())
-        .and_then(|((t, window), (camera, cam_tf))| {
-            let cursor = window.cursor_position()?;
-            let target = cursor_ground(cursor, camera, cam_tf, t)?;
+    // Aim toward the aim point's ground position if we have one, else ahead.
+    let aim_dir = input
+        .aim
+        .zip(terrain.as_ref())
+        .and_then(|(screen, t)| {
+            let (camera, cam_tf) = cameras.get_single().ok()?;
+            let target = cursor_ground(screen, camera, cam_tf, t)?;
             (target - muzzle_pos).try_normalize()
         })
         .unwrap_or(forward);
 
-    let fire_main = keys.just_pressed(KeyCode::KeyE) || mouse.just_pressed(MouseButton::Left);
-    if fire_main && weapon.main.finished() {
+    if input.fire_main && weapon.main.finished() {
         weapon.main.reset();
         commands.spawn((
             Mesh3d(assets.shell_mesh.clone()),
@@ -180,8 +173,7 @@ fn fire_weapons(
         ));
     }
 
-    let fire_mg = keys.pressed(KeyCode::KeyQ) || mouse.pressed(MouseButton::Right);
-    if fire_mg && weapon.mg.finished() {
+    if input.fire_mg && weapon.mg.finished() {
         weapon.mg.reset();
         // A little spread so it reads as a spraying MG.
         let jitter = Vec3::new(
