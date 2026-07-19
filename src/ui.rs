@@ -120,7 +120,7 @@ fn spawn_hud(mut commands: Commands) {
                 "Drive: W A S D / arrows • Aim: mouse (turret traverses to it)",
                 "Main gun: E / left-click — requests a shot; the gun lays on",
                 "   target and fires once aligned and loaded",
-                "Machine gun: Q / right-click",
+                "Machine gun (hull, forward, short range): Q / right-click",
                 "Touch: left stick drives • drag right to aim • FIRE / MG",
                 "Camera: middle-drag orbit • R F pitch • wheel zoom",
             ] {
