@@ -3,6 +3,27 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.10.0] - 2026-07-20
+
+### Added
+- **Infantry squads.** Low-poly WWII foot soldiers (feldgrau uniform, Stahlhelm,
+  slung rifle) now advance on the player in loose squads, legs and arms swinging
+  in a marching gait, holding at a standoff and popping the odd rifle shot. They
+  are soft targets: a nearby shell or bomb blast, or a machine-gun burst, cuts
+  them down — they topple and lie where they fell before fading away.
+
+### Changed
+- **Enemy panzers manoeuvre.** They no longer sit parked. A section forms a line
+  abreast that advances to a standoff and holds with its guns on the player,
+  while a pair sweeps around to flank — all while the existing fire-control keeps
+  laying and firing on the move.
+- **Bigger battlefield.** The map is substantially larger (with a proportionally
+  denser heightmap so the terrain facets stay crisp), giving the armor, infantry,
+  and aircraft room to manoeuvre; the camera can zoom out further to survey it.
+- **Larger aircraft.** The dive-bombers are scaled up so they clearly dwarf the
+  tanks below (and fly a touch higher and faster), reading as proper aircraft
+  from the isometric camera.
+
 ## [0.9.0] - 2026-07-19
 
 ### Added

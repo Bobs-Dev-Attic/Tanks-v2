@@ -7,7 +7,7 @@ use crate::combat::{Armor, TankRig};
 use crate::control::PlayerControlled;
 use crate::effects::{spawn_dust, spawn_track_mark, EffectAssets, Wreckage};
 use crate::physics::Vehicle;
-use crate::terrain::Terrain;
+use crate::terrain::{Terrain, MAP_SIZE};
 use crate::weapons::{EnemyGunner, GunMount, HullMg, Muzzle, Shake, Turret, Weapons};
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -26,9 +26,35 @@ pub struct TankPlugin;
 impl Plugin for TankPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_training_mission)
-            .add_systems(Update, (animate_tracks, emit_track_effects));
+            .add_systems(
+                Update,
+                (maneuver_enemies, animate_tracks, emit_track_effects),
+            );
     }
 }
+
+/// How the enemy panzers manoeuvre relative to the player.
+#[derive(Clone, Copy)]
+enum EnemyRole {
+    /// Hold a slot in a line abreast that advances to a standoff range and keeps
+    /// its guns on the player. `slot` is the lateral offset (world units) of this
+    /// tank within the line.
+    Formation { slot: f32 },
+    /// Sweep around the player's flank at a fixed radius. `side` is +1 (orbit
+    /// clockwise) or -1 (counter-clockwise).
+    Flank { side: f32 },
+}
+
+/// Movement AI state for an enemy tank.
+#[derive(Component)]
+pub struct EnemyTactics {
+    role: EnemyRole,
+}
+
+/// Standoff range the formation holds from the player (inside gun range).
+const FORMATION_STANDOFF: f32 = 78.0;
+/// Radius the flanking panzers orbit the player at.
+const FLANK_RADIUS: f32 = 66.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Team {
@@ -87,16 +113,26 @@ fn spawn_training_mission(
         Team::Player,
     );
 
-    // A few dark-gray enemy panzers downrange (at -Z), facing back toward the
-    // player at the origin (yaw 0 heads toward +Z).
-    for (dx, dz) in [(-20.0, -34.0), (6.0, -44.0), (30.0, -28.0)] {
+    // Dark-gray enemy panzers downrange (at -Z), facing back toward the player
+    // (yaw 0 heads toward +Z). They no longer sit parked: a line-abreast section
+    // advances to a standoff and holds, while a pair sweeps around to flank —
+    // see `maneuver_enemies`. Spawn positions are spread across the wider field.
+    let squad: [(f32, f32, EnemyRole); 6] = [
+        (-46.0, -70.0, EnemyRole::Formation { slot: -45.0 }),
+        (-16.0, -84.0, EnemyRole::Formation { slot: -15.0 }),
+        (16.0, -84.0, EnemyRole::Formation { slot: 15.0 }),
+        (46.0, -70.0, EnemyRole::Formation { slot: 45.0 }),
+        (-96.0, -58.0, EnemyRole::Flank { side: -1.0 }),
+        (96.0, -58.0, EnemyRole::Flank { side: 1.0 }),
+    ];
+    for (dx, dz, role) in squad {
         let px = center.x + dx;
         let pz = center.y + dz;
         let g = terrain
             .as_ref()
             .map(|t| t.height_at(px, pz))
             .unwrap_or(0.0);
-        spawn_tank(
+        let enemy = spawn_tank(
             &mut commands,
             &mut meshes,
             &mut materials,
@@ -106,6 +142,7 @@ fn spawn_training_mission(
             0.0,
             Team::Enemy,
         );
+        commands.entity(enemy).insert(EnemyTactics { role });
     }
 }
 
@@ -118,7 +155,7 @@ fn spawn_tank(
     start_y: f32,
     yaw: f32,
     team: Team,
-) {
+) -> Entity {
     // German WWII tanks (Tiger/Panzer look) get a boxier, bigger turret, a long
     // overhanging gun, a commander's cupola, and side skirts (Schürzen).
     let german = team == Team::Enemy;
@@ -203,13 +240,14 @@ fn spawn_tank(
     let start = Vec3::new(ground_xz.x, start_y, ground_xz.y);
     let mut vehicle = Vehicle::default();
     vehicle.yaw = yaw;
-    // Enemies keep a normal max_speed (a zero would divide-by-zero in the
-    // physics' speed factor and NaN out their position). Nothing writes their
-    // throttle, so they stay parked — and they're immovable, so driving into one
-    // stops the player rather than shoving it aside.
+    // Enemy panzers now manoeuvre (see `maneuver_enemies`), so they get a
+    // slightly slower top speed and lazier steering than the player — heavy
+    // Tigers — and stay collidable/movable so they hold formation without
+    // interpenetrating and can be shoved a little when rammed.
     if german {
         vehicle.radius = 3.0;
-        vehicle.movable = false;
+        vehicle.max_speed = 11.0;
+        vehicle.turn_rate = 1.1;
     }
 
     let mut wheels: Vec<(Entity, f32)> = Vec::new();
@@ -454,6 +492,86 @@ fn spawn_tank(
         // Enemy tanks get fire-control so they can shoot back.
         commands.entity(root).insert(EnemyGunner::new(t, g, m));
     }
+
+    root
+}
+
+/// Drive the enemy panzers: formation tanks form a line abreast at a standoff
+/// range and hold there with their guns on the player; flanking tanks orbit
+/// around to his side. Each writes `throttle`/`steer` on its [`Vehicle`]; the
+/// physics integrates the motion and the fire-control ([`weapons::enemy_ai`])
+/// keeps laying and firing the gun while they move.
+fn maneuver_enemies(
+    time: Res<Time>,
+    players: Query<&Transform, With<PlayerControlled>>,
+    mut enemies: Query<
+        (&Transform, &mut Vehicle, &EnemyTactics, &Armor),
+        Without<PlayerControlled>,
+    >,
+) {
+    let Ok(player_tf) = players.get_single() else {
+        return;
+    };
+    let ppos = player_tf.translation;
+    let t = time.elapsed_secs();
+    let bound = MAP_SIZE * 0.45;
+
+    for (tf, mut vehicle, tactics, armor) in &mut enemies {
+        if armor.destroyed {
+            vehicle.throttle = 0.0;
+            vehicle.steer = 0.0;
+            continue;
+        }
+        let pos = tf.translation;
+        let to_player = Vec2::new(ppos.x - pos.x, ppos.z - pos.z);
+        let range = to_player.length().max(0.001);
+        let dirp = to_player / range; // unit vector toward the player (x,z)
+
+        // Decide a goal point on the ground for this tank's role.
+        let goal = match tactics.role {
+            EnemyRole::Formation { slot } => {
+                // A line abreast standing `FORMATION_STANDOFF` in front of the
+                // player, each tank offset sideways by its slot.
+                let perp = Vec2::new(dirp.y, -dirp.x); // right of the player dir
+                Vec2::new(ppos.x, ppos.z) - dirp * FORMATION_STANDOFF + perp * slot
+            }
+            EnemyRole::Flank { side } => {
+                // Orbit the player: push the tank's bearing around the circle so
+                // it sweeps toward his flank, closing to FLANK_RADIUS.
+                let bearing = (pos.z - ppos.z).atan2(pos.x - ppos.x);
+                let gb = bearing + side * 0.6;
+                Vec2::new(ppos.x, ppos.z) + Vec2::new(gb.cos(), gb.sin()) * FLANK_RADIUS
+            }
+        };
+        // Keep goals on the field.
+        let goal = Vec2::new(goal.x.clamp(-bound, bound), goal.y.clamp(-bound, bound));
+
+        let to_goal = goal - Vec2::new(pos.x, pos.z);
+        let dist = to_goal.length();
+
+        // Steer to face the goal. Heading is `(sin yaw, cos yaw)`, so the yaw
+        // that points at `(gx, gz)` is `atan2(gx, gz)`.
+        let desired_yaw = to_goal.x.atan2(to_goal.y);
+        let err = wrap_angle(desired_yaw - vehicle.yaw);
+        vehicle.steer = (err * 2.0).clamp(-1.0, 1.0);
+
+        // Advance while there is meaningful distance to cover and the tank is
+        // roughly pointed the right way; ease off as it arrives so it settles
+        // into its slot instead of jittering. A tiny idle drift (t-based) keeps
+        // a settled line from looking frozen.
+        let facing = err.cos().max(0.0);
+        let idle = 0.04 * (t * 0.7 + pos.x).sin();
+        vehicle.throttle = if dist > 4.0 {
+            (facing * (dist / 10.0).min(1.0)).max(0.05)
+        } else {
+            idle
+        };
+    }
+}
+
+/// Shortest signed angle into `[-PI, PI]`.
+fn wrap_angle(a: f32) -> f32 {
+    (a + PI).rem_euclid(2.0 * PI) - PI
 }
 
 /// Spawn one rolling wheel laid on its side (axle across the hull) and return it.

@@ -9,20 +9,27 @@
 use crate::combat::Armor;
 use crate::control::PlayerControlled;
 use crate::effects::{spawn_explosion, EffectAssets, Wreckage};
+use crate::soldiers::Soldier;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
 use std::f32::consts::FRAC_PI_2;
 
 /// Cruising speed of an attacking plane (world units / second).
-const AIR_SPEED: f32 = 52.0;
+const AIR_SPEED: f32 = 58.0;
 /// Altitude the planes fly at — well above the tallest terrain.
-const AIR_ALT: f32 = 40.0;
+const AIR_ALT: f32 = 46.0;
+/// Overall scale of a plane. The base model is roughly tank-sized; scaling it up
+/// makes the aircraft read as clearly larger than the tanks below (a real
+/// dive-bomber dwarfs a tank), and keeps them legible from the high iso camera.
+const PLANE_SCALE: f32 = 2.2;
 /// Seconds between attack waves.
 const WAVE_INTERVAL: f32 = 15.0;
 /// Bomb ballistics and effect.
 const BOMB_GRAVITY: f32 = 32.0;
 const BOMB_DAMAGE: f32 = 60.0;
 const BOMB_SPLASH: f32 = 8.0;
+/// A bomb's HE blast fells any infantry within this (larger) radius.
+const BOMB_INFANTRY_KILL: f32 = 12.0;
 
 pub struct AircraftPlugin;
 
@@ -171,7 +178,7 @@ fn spawn_aircraft(
             Transform {
                 translation: pos,
                 rotation: facing.rotation,
-                ..default()
+                scale: Vec3::splat(PLANE_SCALE),
             },
             Visibility::default(),
             Name::new("Aircraft"),
@@ -327,6 +334,7 @@ fn update_bombs(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut bombs: Query<(Entity, &mut Bomb, &mut Transform)>,
     mut players: Query<(&GlobalTransform, &mut Armor), With<PlayerControlled>>,
+    mut soldiers: Query<(&GlobalTransform, &mut Soldier)>,
 ) {
     let Some(terrain) = terrain else {
         return;
@@ -357,6 +365,12 @@ fn update_bombs(
                     if d < BOMB_SPLASH {
                         armor.damage(BOMB_DAMAGE * (1.0 - d / BOMB_SPLASH));
                     }
+                }
+            }
+            // Infantry near the bomb are killed.
+            for (stf, mut soldier) in soldiers.iter_mut() {
+                if !soldier.dead && stf.translation().distance(at) < BOMB_INFANTRY_KILL {
+                    soldier.dead = true;
                 }
             }
             commands.entity(entity).despawn_recursive();

@@ -14,6 +14,7 @@ use crate::effects::{
     spawn_explosion, spawn_gun_smoke, spawn_impact_puff, spawn_muzzle_flash, EffectAssets, Wreckage,
 };
 use crate::input::GameInput;
+use crate::soldiers::Soldier;
 use crate::tank::Tank;
 use crate::terrain::{Terrain, MAP_SIZE};
 use bevy::prelude::*;
@@ -52,6 +53,10 @@ const ENEMY_SPREAD: f32 = 0.06;
 /// Enemy shells hit softer than the player's, so several tanks firing back stay
 /// survivable in the training mission.
 const ENEMY_DAMAGE: f32 = 26.0;
+/// A shell blast fells any infantry within this radius; an MG tracer cuts down a
+/// soldier it passes this close to.
+const SHELL_INFANTRY_KILL: f32 = 7.0;
+const MG_INFANTRY_KILL: f32 = 1.0;
 
 pub struct WeaponsPlugin;
 
@@ -666,6 +671,7 @@ fn update_projectiles(
     mut shells: Query<(Entity, &mut Shell, &mut Transform), Without<Tracer>>,
     mut tracers: Query<(Entity, &mut Tracer, &mut Transform), Without<Shell>>,
     mut targets: Query<(&GlobalTransform, &mut Armor, Has<PlayerControlled>), With<Tank>>,
+    mut soldiers: Query<(&GlobalTransform, &mut Soldier)>,
 ) {
     let Some(terrain) = terrain else {
         return;
@@ -714,6 +720,12 @@ fn update_projectiles(
                     armor.damage(shell_damage * (1.0 - d / SHELL_SPLASH));
                 }
             }
+            // Infantry caught in the blast are cut down regardless of team.
+            for (stf, mut soldier) in soldiers.iter_mut() {
+                if !soldier.dead && stf.translation().distance(at) < SHELL_INFANTRY_KILL {
+                    soldier.dead = true;
+                }
+            }
             if let Some(fx) = effects.as_ref() {
                 spawn_explosion(
                     &mut commands,
@@ -733,6 +745,29 @@ fn update_projectiles(
         tracer.vel.y -= 6.0 * dt;
         tf.translation += tracer.vel * dt;
         tracer.life -= dt;
+
+        // A tracer passing close to a soldier's torso cuts him down and stops.
+        let mut soldier_hit = false;
+        for (stf, mut soldier) in soldiers.iter_mut() {
+            if soldier.dead {
+                continue;
+            }
+            let c = stf.translation();
+            let flat = (tf.translation.x - c.x).hypot(tf.translation.z - c.z);
+            if flat < MG_INFANTRY_KILL && (tf.translation.y - (c.y + 1.1)).abs() < 1.2 {
+                soldier.dead = true;
+                soldier_hit = true;
+                break;
+            }
+        }
+        if soldier_hit {
+            if let Some(fx) = effects.as_ref() {
+                spawn_impact_puff(&mut commands, fx, &mut materials, tf.translation);
+            }
+            commands.entity(entity).despawn_recursive();
+            continue;
+        }
+
         let ground = terrain.height_at(tf.translation.x, tf.translation.z);
         let hit_ground = tf.translation.y <= ground + 0.05;
         let out = tf.translation.x.abs() > limit || tf.translation.z.abs() > limit;
