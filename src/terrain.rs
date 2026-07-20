@@ -10,9 +10,12 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 
 /// The map spans this many world units on X and Z (centered on the origin).
-pub const MAP_SIZE: f32 = 560.0;
-/// Number of grid cells per side (vertices per side is `GRID + 1`).
-const GRID: usize = 150;
+/// A large battlefield so the armored columns, flanking panzers, infantry, and
+/// air attacks all have room to manoeuvre.
+pub const MAP_SIZE: f32 = 900.0;
+/// Number of grid cells per side (vertices per side is `GRID + 1`). Scaled up
+/// with the map so the low-poly facets stay a similar size on the ground.
+const GRID: usize = 220;
 /// Peak terrain elevation in world units.
 const MAX_HEIGHT: f32 = 32.0;
 

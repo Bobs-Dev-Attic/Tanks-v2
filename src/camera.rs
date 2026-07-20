@@ -52,7 +52,8 @@ impl Default for IsoCamera {
 }
 
 const MIN_SCALE: f32 = 9.0;
-const MAX_SCALE: f32 = 360.0;
+// Allow zooming further out so the larger battlefield can be surveyed.
+const MAX_SCALE: f32 = 520.0;
 /// Number of discrete zoom steps.
 const ZOOM_LEVELS: usize = 10;
 

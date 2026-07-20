@@ -18,6 +18,7 @@ mod input;
 mod physics;
 // Retained for the full squad mode; the current training mission uses direct
 // keyboard control instead (see `control`).
+mod soldiers;
 #[allow(dead_code)]
 mod squad;
 mod tank;
@@ -76,6 +77,7 @@ fn main() {
             weapons::WeaponsPlugin,
             combat::CombatPlugin,
             aircraft::AircraftPlugin,
+            soldiers::SoldiersPlugin,
             effects::EffectsPlugin,
             ui::UiPlugin,
         ))
