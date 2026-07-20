@@ -9,6 +9,7 @@
 //! - [`squad`]    selection and move-order command & control
 //! - [`ui`]       loading screen (with version) and in-game HUD
 
+mod aircraft;
 mod camera;
 mod combat;
 mod control;
@@ -74,6 +75,7 @@ fn main() {
             control::ControlPlugin,
             weapons::WeaponsPlugin,
             combat::CombatPlugin,
+            aircraft::AircraftPlugin,
             effects::EffectsPlugin,
             ui::UiPlugin,
         ))

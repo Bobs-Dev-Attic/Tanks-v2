@@ -3,6 +3,17 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.9.0] - 2026-07-19
+
+### Added
+- **WWII aircraft & aerial attacks.** Enemy dive-bombers now sweep in from the map
+  edge in waves, line up on the player, and release a bomb with a ballistic lead
+  so it lands on target before roaring off the far side. The planes are low-poly
+  Stuka-style aircraft — fuselage, wings, glass canopy, yellow spinner nose with a
+  spinning prop, and fixed spatted landing gear. Bombs fall under gravity and
+  detonate with a big HE blast that splash-damages the player through the shared
+  damage system.
+
 ## [0.8.3] - 2026-07-19
 
 ### Changed
