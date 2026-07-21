@@ -3,6 +3,16 @@
 All notable changes to **Tanks-v2** are recorded here. The version shown on the
 loading screen comes from `Cargo.toml` (`version` field) via `env!("CARGO_PKG_VERSION")`.
 
+## [0.10.1] - 2026-07-20
+
+### Added
+- **Two-finger camera orbit on touch.** A two-finger gesture now works the whole
+  camera: the change in the fingers' spread still zooms (pinch), and dragging the
+  two fingers around orbits the view — horizontal motion yaws, vertical motion
+  pitches — so mobile players can rotate around the battlefield instead of being
+  locked to the default isometric angle. The two read independent parts of one
+  gesture (distance vs. midpoint), so pinch and rotate coexist.
+
 ## [0.10.0] - 2026-07-20
 
 ### Added

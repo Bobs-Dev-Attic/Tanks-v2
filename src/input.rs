@@ -10,7 +10,9 @@
 //!   main gun, `Q`/right-click fire the MG. Camera: middle-drag orbit, `R`/`F`
 //!   pitch, wheel or `Z`/`X` zoom.
 //! - Mobile: a left thumb-stick drives, touching the right side aims the turret,
-//!   and the on-screen FIRE / MG buttons fire.
+//!   a double-tap designates the main-gun target, the MG button fires the hull
+//!   MG, and a two-finger gesture works the camera — pinch/spread to zoom and
+//!   drag the two fingers to orbit (yaw + pitch).
 
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
@@ -18,6 +20,9 @@ use bevy::window::PrimaryWindow;
 
 /// Movement (in logical px) beyond which a mouse press is a drag, not a click.
 const DRAG_THRESHOLD: f32 = 8.0;
+/// How fast a two-finger drag orbits the camera (degrees of orbit per logical px
+/// the fingers' midpoint travels). Matches the desktop middle-drag feel.
+const TOUCH_ORBIT_SENS: f32 = 0.3;
 
 /// On-screen button radius (logical px).
 pub const BTN_R: f32 = 60.0;
@@ -71,6 +76,8 @@ struct PointerState {
     /// Last two-finger distance, for pinch-to-zoom.
     last_pinch: Option<f32>,
     pinch_accum: f32,
+    /// Last two-finger midpoint, for two-finger drag-to-orbit.
+    last_pinch_center: Option<Vec2>,
     /// Last single tap (position and time), for double-tap detection.
     last_tap_pos: Option<Vec2>,
     last_tap_time: f32,
@@ -151,14 +158,27 @@ fn gather_input(
     let is_free = |start: Vec2| !in_stick(start) && !on_button(start);
     let free: Vec<_> = touches.iter().filter(|t| is_free(t.start_position())).collect();
 
-    // --- Pinch to zoom (two free fingers) or single-finger aim ---
+    // --- Two free fingers: pinch (spread) zooms, drag (midpoint) orbits.
+    //     One free finger: aim. ---
+    // The two read independent parts of the same gesture — the change in the
+    // fingers' *distance* zooms while the movement of their *midpoint* orbits —
+    // so a pinch and a rotate coexist without a separate gesture.
     let mut aim_touch = None;
     if free.len() >= 2 {
-        let dist = free[0].position().distance(free[1].position());
+        let p0 = free[0].position();
+        let p1 = free[1].position();
+        let dist = p0.distance(p1);
+        let center = (p0 + p1) * 0.5;
         if let Some(prev) = state.last_pinch {
             state.pinch_accum += dist - prev;
         }
+        // Two-finger drag orbits: yaw from horizontal midpoint motion, pitch from
+        // vertical (same sign convention as the desktop middle-drag orbit).
+        if let Some(prev_center) = state.last_pinch_center {
+            game.orbit += (center - prev_center) * TOUCH_ORBIT_SENS;
+        }
         state.last_pinch = Some(dist);
+        state.last_pinch_center = Some(center);
         // Each ~45px of spread is one zoom level (spread = zoom in).
         while state.pinch_accum > 45.0 {
             game.zoom += 1.0;
@@ -171,6 +191,7 @@ fn gather_input(
     } else {
         state.last_pinch = None;
         state.pinch_accum = 0.0;
+        state.last_pinch_center = None;
         if let Some(t) = free.first() {
             aim_touch = Some(t.position());
         }
