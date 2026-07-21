@@ -121,7 +121,8 @@ fn spawn_hud(mut commands: Commands) {
                 "Main gun: click / E to designate a target — the turret then",
                 "   traverses, lays on it, and fires when ready",
                 "Machine gun (hull, forward, short range): Q / right-click",
-                "Touch: stick drives • double-tap = target • pinch = zoom • MG btn",
+                "Touch: stick drives • double-tap = target • MG btn",
+                "   Two fingers: pinch = zoom • drag = rotate camera",
                 "Camera: middle-drag orbit • R F pitch • wheel zoom",
             ] {
                 p.spawn((
